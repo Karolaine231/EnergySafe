@@ -11,52 +11,32 @@ function clearError(){
   errorBox.style.display = "none";
 }
 
-function saveAuth(email, profile, persistMode){
-  const payload = {
-    isAuthenticated: true,
-    email: email,
-    profile: profile,
-    loginAt: new Date().toISOString()
-  };
-
-  if(persistMode === "local"){
-    localStorage.setItem("energiaVerde_auth", JSON.stringify(payload));
-    sessionStorage.removeItem("energiaVerde_auth");
-  } else {
-    sessionStorage.setItem("energiaVerde_auth", JSON.stringify(payload));
-    localStorage.removeItem("energiaVerde_auth");
-  }
-}
-
 form.addEventListener("submit", function(e){
   e.preventDefault();
   clearError();
 
-  const email = document.getElementById("email").value.trim();
+  const email = document.getElementById("email").value.trim().toLowerCase();
   const password = document.getElementById("password").value.trim();
-  const profile = document.getElementById("profile").value;
-
-  // No seu HTML atual você removeu o select "remember"
-  // Então vamos deixar um padrão seguro:
-  const rememberEl = document.getElementById("remember");
-  const persistMode = rememberEl ? rememberEl.value : "local";
 
   if(!email || !password){
     showError("Preencha e-mail e senha.");
     return;
   }
 
-  saveAuth(email, profile, persistMode);
+  // 👇 EMAILS PERMITIDOS (você pode mudar depois)
+  const emailFinanceiro = "financeiro@energia.com";
+  const emailManutencao = "manutencao@energia.com";
 
-  // Se você ainda não tem dashboard.html, isso vai dar erro 404.
-  // Pode trocar para "financeiro.html" ou outra página que exista.
-  window.location.href = "financeiro.html";
+  if(email === emailFinanceiro){
+    // salva sessão (opcional)
+    localStorage.setItem("perfil", "financeiro");
+    window.location.href = "financeiro.html";
+  }
+  else if(email === emailManutencao){
+    localStorage.setItem("perfil", "manutencao");
+    window.location.href = "manutencao.html";
+  }
+  else{
+    showError("E-mail não autorizado.");
+  }
 });
-
-/* Botão Entenda mais sobre */
-const btnSobre = document.getElementById("btnSobre");
-if (btnSobre) {
-  btnSobre.addEventListener("click", () => {
-    window.location.href = "sobre.html";
-  });
-}
