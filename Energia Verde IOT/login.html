@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="icon" type="image/png" sizes="32x32" href="EnergiaVerdeLogo.png">
+  <title>Energia Verde • Login</title>
+
+  <link rel="stylesheet" href="login.css" />
+</head>
+
+<body>
+  <main class="wrap">
+    <section class="brand">
+        <div class="logo-container">
+            <img src="EnergiaVerdeLogo.png" alt="Energia Verde Logo" class="logo-img">
+        </div>
+      <div class="badge">
+        <span class="dot"></span>
+        Energia Verde • Monitoramento Energético (Via IoT)
+      </div>
+
+      <h1>Bem-vinda(o)</h1>
+
+      <p>
+        Acesse o painel para acompanhar consumo em tempo real,
+        histórico, metas e alertas.
+      </p>
+
+    </section>
+
+    <section class="card">
+      <h2>Entrar</h2>
+
+      <div id="errorBox" class="error"></div>
+
+      <form id="loginForm">
+        <div class="field">
+          <label for="email">E-mail</label>
+          <input id="email" type="email" placeholder="email@exemplo.com" />
+        </div>
+
+        <div class="field">
+          <label for="password">Senha</label>
+          <input id="password" type="password" placeholder="••••••••" />
+        </div>
+        </div>
+
+        <div class="actions">
+          <button class="btn-primary" type="submit">
+            Acessar
+          </button>
+
+          <button class="btn-ghost" type="button" id="btnSobre">
+            Entenda mais sobre
+          </button>
+        </div>
+      </form>
+    </section>
+  </main>
+
+  <script src="login.js"></script>
+</body>
+</html>

@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Energia Verde • Sobre</title>
+
+  <!-- se você já tiver favicon, mantenha -->
+  <link rel="icon" href="favicon.ico">
+
+  <link rel="stylesheet" href="sobre.css" />
+</head>
+<body>
+  <main class="page">
+    <header class="top">
+      <div class="brand">
+        <img class="logo" src="EnergiaVerdeLogo.png" alt="Energia Verde">
+        <div class="title">
+          <h1>Energia Verde</h1>
+          <p>Plataforma de monitoramento energético (IoT)</p>
+        </div>
+      </div>
+
+      <nav class="nav">
+        <a class="btn" href="login.html">Voltar para Login</a>
+      </nav>
+    </header>
+
+    <section class="hero">
+      <div class="hero-card">
+        <h2>Para que serve esta plataforma?</h2>
+        <p>
+          Esta plataforma foi criada para <strong>monitorar o consumo de energia elétrica</strong> de forma
+          clara, confiável e organizada, com foco em <strong>evidenciar consumo e possíveis reduções</strong>.
+          Ela foi pensada para ambientes reais como <strong>instituições de ensino e hospital-escola</strong>,
+          onde o controle e a transparência do consumo energético são essenciais.
+        </p>
+
+        <div class="chips">
+          <span class="chip">Sem controle de carga • Apenas monitoramento</span>
+        </div>
+      </div>
+
+      <div class="hero-card">
+        <h2>Finalidade do projeto</h2>
+        <ul class="list">
+          <li>
+            <strong>Tempo real:</strong> acompanhar potência instantânea (W) e status de medição por local/quadro/circuito.
+          </li>
+          <li>
+            <strong>Histórico:</strong> analisar consumo acumulado (kWh) por dia, mês e períodos personalizados.
+          </li>
+          <li>
+            <strong>Metas:</strong> apoiar ações de redução com metas e comparação antes/depois.
+          </li>
+          <li>
+            <strong>Alertas:</strong> identificar picos, consumo fora do horário, sensores offline e anomalias.
+          </li>
+          <li>
+            <strong>Relatórios:</strong> gerar evidências e exportações (ex.: CSV) para análise e rateio.
+          </li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="grid">
+      <article class="card">
+        <h3>Como os dados são coletados</h3>
+        <p>
+          A medição é feita diretamente nos <strong>quadros elétricos</strong> por <strong>submedição em circuitos</strong>.
+          Sensores com <strong>TC Clamp (transformador de corrente)</strong> capturam a corrente elétrica do circuito,
+          um módulo de leitura processa os dados e um microcontrolador (ex.: ESP32) envia as leituras via Wi-Fi.
+        </p>
+        <div class="flow">
+          <span>TC Clamp</span><i>→</i>
+          <span>Condicionamento</span><i>→</i>
+          <span>ESP32</span><i>→</i>
+          <span>API</span><i>→</i>
+          <span>Banco</span><i>→</i>
+          <span>Dashboard</span>
+        </div>
+      </article>
+
+      <article class="card">
+        <h3>Por que isso é importante</h3>
+        <p>
+          A plataforma ajuda a transformar dados técnicos em <strong>informação visual e acionável</strong>.
+          Isso facilita decisões de eficiência energética e cria uma base sólida de evidências para relatórios,
+          metas internas e iniciativas alinhadas aos ODS.
+        </p>
+        <div class="note">
+          <strong>Importante:</strong> este sistema não desliga equipamentos e não interfere na rede elétrica —
+          ele apenas monitora e registra leituras.
+        </div>
+      </article>
+
+      <article class="card">
+        <h3>O que você verá no dashboard</h3>
+        <ul class="bullets">
+          <li>Resumo geral (kWh diário/mensal, picos, status)</li>
+          <li>Gráficos históricos com filtros por período</li>
+          <li>Seleção por local, quadro e circuito</li>
+          <li>Painel de alertas e eventos</li>
+          <li>Metas e indicadores de redução</li>
+        </ul>
+      </article>
+    </section>
+
+    <footer class="footer">
+      <span>Energia Verde • Protótipo acadêmico aplicado • v0.1</span>
+    </footer>
+  </main>
+</body>
+</html>
