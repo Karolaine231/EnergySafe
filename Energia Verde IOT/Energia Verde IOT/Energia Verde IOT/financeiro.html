@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Safe Energy • Financeiro</title>
+
+  <link rel="icon" type="image/png" sizes="32x32" href="EnergiaVerdeLogo.png">
+  <link rel="stylesheet" href="financeiro.css" />
+
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="sb-top">
+        <img src="EnergiaVerdeLogo.png" class="sb-logo" alt="Energia Verde">
+        <div class="sb-title">
+          <div class="name">Safe Energy</div>
+          <div class="sub">Financeiro • Rateio e Indicadores</div>
+        </div>
+      </div>
+
+      <div class="sb-section">
+        <div class="sb-label">Filtros</div>
+
+        <label class="field">
+          <span>Período</span>
+          <select id="periodo">
+            <option value="7d">Últimos 7 dias</option>
+            <option value="30d" selected>Últimos 30 dias</option>
+            <option value="mtd">Mês atual (MTD)</option>
+            <option value="custom">Personalizado</option>
+          </select>
+        </label>
+
+        <div class="row2" id="customRange" style="display:none;">
+          <label class="field">
+            <span>De</span>
+            <input type="date" id="dateFrom" />
+          </label>
+
+          <label class="field">
+            <span>Até</span>
+            <input type="date" id="dateTo" />
+          </label>
+        </div>
+
+        <label class="field">
+          <span>Local</span>
+          <select id="local">
+            <option value="">Carregando...</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span>Quadro</span>
+          <select id="quadro">
+            <option value="">Selecione um local</option>
+          </select>
+        </label>
+
+        <label class="field">
+          <span>Circuito</span>
+          <select id="circuito">
+            <option value="">Selecione um quadro</option>
+          </select>
+        </label>
+
+        <button class="btn btn-ghost" id="btnAplicar">Aplicar filtros</button>
+      </div>
+
+      <div class="sb-section">
+        <div class="sb-label">Ações</div>
+        <button class="btn btn-primary" id="btnExportCsv">Exportar CSV</button>
+        <button class="btn btn-ghost" id="btnPrint">Gerar resumo (impressão)</button>
+      </div>
+
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="left">
+          <h1>Visão Financeira</h1>
+          <p id="subtitle">Resumo consolidado para rateio e indicadores</p>
+        </div>
+
+        <div class="right">
+          <div class="status" id="statusTag">
+            <span class="dot"></span>
+            <span>Atualizado agora</span>
+          </div>
+
+          <a class="btn btn-ghost" href="index.html">Sair</a>
+        </div>
+      </header>
+
+      <section class="kpis">
+        <div class="kpi">
+          <div class="kpi-label">Consumo (kWh) • Período</div>
+          <div class="kpi-value" id="kpiKwhPeriodo">—</div>
+          <div class="kpi-sub" id="kpiKwhPeriodoSub">—</div>
+        </div>
+
+        <div class="kpi">
+          <div class="kpi-label">Custo estimado (R$)</div>
+          <div class="kpi-value" id="kpiCusto">—</div>
+          <div class="kpi-sub">Tarifa configurável</div>
+        </div>
+
+        <div class="kpi">
+          <div class="kpi-label">Pico (W) • Período</div>
+          <div class="kpi-value" id="kpiPico">—</div>
+          <div class="kpi-sub">Maior potência registrada</div>
+        </div>
+
+        <div class="kpi">
+          <div class="kpi-label">Indicador de redução</div>
+          <div class="kpi-value" id="kpiReducao">—</div>
+          <div class="kpi-sub">Comparação vs baseline</div>
+        </div>
+      </section>
+
+      <section class="grid">
+        <article class="card card-wide">
+          <div class="card-head">
+            <div>
+              <h2>Consumo diário (kWh)</h2>
+              <p>Usado para acompanhamento e rateio.</p>
+            </div>
+
+            <div class="mini-actions">
+              <label class="chip">
+                Tarifa (R$/kWh)
+                <input id="tarifa" type="number" step="0.01" min="0" value="0.95">
+              </label>
+            </div>
+          </div>
+
+          <div class="chart-wrap">
+            <canvas id="chartKwh"></canvas>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <div>
+              <h2>Rateio por área</h2>
+              <p>Distribuição percentual do consumo.</p>
+            </div>
+          </div>
+
+          <div class="chart-wrap small">
+            <canvas id="chartRateio"></canvas>
+          </div>
+
+          <div class="legend" id="rateioLegend"></div>
+        </article>
+
+        <article class="card">
+          <div class="card-head">
+            <div>
+              <h2>Pontos de atenção</h2>
+              <p>Alertas com impacto no custo e operação.</p>
+            </div>
+          </div>
+
+          <ul class="alerts" id="alertsList"></ul>
+        </article>
+
+        <article class="card card-wide">
+          <div class="card-head">
+            <div>
+              <h2>Resumo consolidado</h2>
+              <p>Visão tabular para relatório.</p>
+            </div>
+          </div>
+
+          <div class="table-wrap">
+            <table class="table" id="tableResumo">
+              <thead>
+                <tr>
+                  <th>Área</th>
+                  <th>kWh (período)</th>
+                  <th>%</th>
+                  <th>Custo estimado (R$)</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+              <tfoot>
+                <tr>
+                  <td><strong>Total</strong></td>
+                  <td id="tTotalKwh">—</td>
+                  <td>100%</td>
+                  <td id="tTotalCost">—</td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </article>
+      </section>
+
+      <footer class="footer">
+        Safe Energy • Financeiro
+      </footer>
+    </main>
+  </div>
+
+  <script src="financeiro.js"></script>
+</body>
+</html>
