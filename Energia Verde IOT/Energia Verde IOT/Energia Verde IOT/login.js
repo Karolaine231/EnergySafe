@@ -30,11 +30,11 @@ form.addEventListener("submit", function(e){
   if(email === emailFinanceiro){
     // salva sessão (opcional)
     localStorage.setItem("perfil", "financeiro");
-    window.location.href = "Energia Verde IOT/Energia Verde IOT/Energia Verde IOT/financeiro.html";
+    window.location.href = "financeiro.html";
   }
   else if(email === emailManutencao){
     localStorage.setItem("perfil", "manutencao");
-    window.location.href = "Energia Verde IOT/Energia Verde IOT/Energia Verde IOT/manutencao.html";
+    window.location.href = "manutencao.html";
   }
   else{
     showError("E-mail não autorizado.");
