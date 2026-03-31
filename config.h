@@ -4,15 +4,23 @@
 #define WIFI_SSID       "SEU_WIFI"
 #define WIFI_PASSWORD   "SUA_SENHA"
 
-// ================= MQTT =================
-#define MQTT_HOST       "192.168.0.10"   // IP do PC com Mosquitto
-#define MQTT_PORT       1883
+// ================= API =================
+// Troque pela URL real quando publicar
+#define API_HOST        "SUA-API.up.railway.app"
+#define API_PORT        443                        // 443 = HTTPS, 80 = HTTP
+#define API_USE_HTTPS   true
+#define API_ENDPOINT    "/medicoes"
 
-#define DEVICE_ID       "esp32-qd01-c1"
-#define MQTT_TOPIC      "energysafe/medicao"
+// ================= IDENTIFICAÇÃO =================
+// canal_id deve corresponder ao ID cadastrado na tabela canais_medicao do banco
+// Cada ESP32/canal físico tem seu próprio canal_id
+#define CANAL_ID        1
 
 // ================= TEMPO =================
-#define PUBLISH_INTERVAL_MS 5000
+#define PUBLISH_INTERVAL_MS  30000   // 30s — suficiente para rateio, reduz carga no banco
+
+// Fuso horário: Brasil (UTC-3) = -3 * 3600 = -10800
+#define TZ_OFFSET_SEC   -10800
 
 // ================= ADC =================
 #define ADC_PIN         34
@@ -25,12 +33,10 @@
 // ================= TC CLAMP =================
 // SCT-013-000 => 100A : 50mA  => ratio = 2000
 #define CT_RATIO        2000.0f
-
-// Resistor burden (ajuste conforme circuito)
 #define BURDEN_OHMS     33.0f
-
-// Ajuste fino de calibração
 #define CALIBRATION_GAIN 1.0f
 
 // ================= ELÉTRICA =================
+// Tensão fixada em 220V RMS (monofásico padrão Brasil)
+// Substitua por leitura real se tiver sensor de tensão
 #define FIXED_VRMS      220.0f
