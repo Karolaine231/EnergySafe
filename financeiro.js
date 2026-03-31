@@ -1,4 +1,4 @@
-const API_BASE = "./api";
+const API_BASE = "https://backendsafe.onrender.com";
 
 function $(id) {
   return document.getElementById(id);
