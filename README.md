@@ -14,7 +14,9 @@ LOCAL → QUADRO → DISPOSITIVO → CANAL → MEDIÇÃO → ALERTA
 | Ambiente | URL |
 |---|---|
 | Produção | https://backendsafe.onrender.com |
-| Documentação interativa | https://backendsafe.onrender.com/docs |
+| Documentação interativa (Swagger) | https://backendsafe.onrender.com/docs |
+
+> O plano gratuito do Render hiberna após 15 min de inatividade. A primeira requisição pode demorar até 50 segundos para acordar o serviço.
 
 ---
 
@@ -22,13 +24,13 @@ LOCAL → QUADRO → DISPOSITIVO → CANAL → MEDIÇÃO → ALERTA
 
 | Camada | Tecnologia |
 |---|---|
-| Framework | FastAPI |
-| ORM | SQLAlchemy |
+| Framework | FastAPI 0.135 |
+| ORM | SQLAlchemy 2.0 |
 | Validação | Pydantic v2 |
 | Banco de dados | PostgreSQL 15 |
-| Servidor | Uvicorn |
+| Servidor ASGI | Uvicorn 0.42 |
 | Containerização local | Docker |
-| Deploy | Render |
+| Deploy | Render (Web Service + PostgreSQL) |
 
 ---
 
@@ -43,13 +45,13 @@ BackendSafe/
 │   ├── quadros.py
 │   ├── dispositivos.py
 │   ├── canais.py
-│   ├── medicoes.py       # inclui lógica de alertas automáticos
+│   ├── medicoes.py       ← inclui lógica de alertas automáticos
 │   └── alertas.py
 │
-├── database.py           # conexão com PostgreSQL
-├── models.py             # modelos ORM (SQLAlchemy)
-├── schemas.py            # validação de entrada/saída (Pydantic)
-├── main.py               # inicialização da API e CORS
+├── database.py           ← conexão com PostgreSQL via SQLAlchemy
+├── models.py             ← modelos ORM
+├── schemas.py            ← validação de entrada/saída (Pydantic)
+├── main.py               ← inicialização da API e CORS
 ├── requirements.txt
 └── README.md
 ```
@@ -58,19 +60,19 @@ BackendSafe/
 
 ##  Modelagem do Banco
 
-```sql
+```
 locais         → nome, andar
 quadros        → local_id, quadro_pai_id (hierárquico)
 dispositivos   → quadro_id, ativo
 canais_medicao → dispositivo_id, fase (A/B/C), tipo
-medicoes       → canal_id, corrente, tensao, potencia, timestamp
-alertas        → canal_id, tipo, nivel, valor, limite, timestamp
+medicoes       → canal_id, corrente, tensao, potencia, valido, timestamp
+alertas        → canal_id, tipo, nivel, valor, limite, timestamp, resolvido
 ```
 
 **Índices de performance:**
-- `idx_medicoes_timestamp`
-- `idx_medicoes_canal`
-- `idx_alertas_timestamp`
+- `idx_medicoes_timestamp` — buscas por período
+- `idx_medicoes_canal` — buscas por canal
+- `idx_alertas_timestamp` — ordenação de alertas
 
 ---
 
@@ -117,7 +119,7 @@ docker-compose up -d
 uvicorn main:app --reload
 ```
 
-API local disponível em: `http://localhost:8000`  
+API local em: `http://localhost:8000`  
 Swagger local em: `http://localhost:8000/docs`
 
 > Qualquer `git push` na branch `Julyxdias-Backend-API` dispara o redeploy automático no Render.
@@ -128,9 +130,10 @@ Swagger local em: `http://localhost:8000/docs`
 
 | Variável | Descrição | Padrão local |
 |---|---|---|
-| `DATABASE_URL` | URL de conexão com o PostgreSQL | `postgresql://postgres:****@localhost:5432/energysafe` |
+| `DATABASE_URL` | URL de conexão PostgreSQL | `postgresql://postgres:SUASENHA@localhost:5432/SEUBANCO` |
 
-Em produção (Render), configure `DATABASE_URL` nas variáveis de ambiente do serviço.
+Em produção, configure `DATABASE_URL` nas variáveis de ambiente do serviço no Render.  
+Se a URL começar com `postgres://`, o `database.py` corrige automaticamente para `postgresql://`.
 
 ---
 
@@ -190,7 +193,8 @@ Em produção (Render), configure `DATABASE_URL` nas variáveis de ambiente do s
 
 ##  Sistema de Alertas
 
-Os alertas são gerados automaticamente pelo backend após cada `POST /medicoes`, sem necessidade de triggers no banco.
+Os alertas são gerados automaticamente pelo backend após cada `POST /medicoes`.  
+Nenhum trigger no banco é necessário — a lógica vive em `routes/medicoes.py`.
 
 | Tipo | Nível | Condição |
 |---|---|---|
@@ -215,15 +219,15 @@ QUEDA_FATOR          = 0.3
 ```
 ESP32 (hardware)
     ↓  POST /medicoes
-Render — API FastAPI
-    ↓  verifica alertas
-Render — PostgreSQL
-    ↑  GET /alertas, GET /medicoes
-Vercel — Frontend (Safe Energy)
+Render — API FastAPI (backendsafe.onrender.com)
+    ↓  verifica alertas automaticamente
+Render — PostgreSQL (energysafe-db)
+    ↑  GET /alertas, GET /medicoes, GET /locais ...
+Vercel — Frontend Safe Energy (energy-safe-9m2q.vercel.app)
 ```
 
 ---
 
-##  Licença
+## 📄 Licença
 
-Projeto acadêmico — Safe Energy • EnergySafe API
+Projeto acadêmico — Safe Energy • EnergySafe API v1.0.0
