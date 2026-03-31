@@ -1,429 +1,691 @@
-const API_BASE = "http://localhost:8000"; // troque pela URL do seu backend em produção
+/* ============================================================
+   Safe Energy • Financeiro — financeiro.js
+   Integração completa com a API: https://backendsafe.onrender.com
+   ============================================================ */
 
-function $(id) {
-  return document.getElementById(id);
-}
+const API = "https://backendsafe.onrender.com";
 
-async function getJSON(url) {
-  const response = await fetch(url);
-  if (!response.ok) throw new Error(`Erro HTTP ${response.status}`);
-  return await response.json();
-}
+// ── Referências DOM ──────────────────────────────────────────
+const selPeriodo    = document.getElementById("periodo");
+const selLocal      = document.getElementById("local");
+const selQuadro     = document.getElementById("quadro");
+const selCircuito   = document.getElementById("circuito");
+const customRange   = document.getElementById("customRange");
+const inputFrom     = document.getElementById("dateFrom");
+const inputTo       = document.getElementById("dateTo");
+const btnAplicar    = document.getElementById("btnAplicar");
+const btnExportCsv  = document.getElementById("btnExportCsv");
+const btnPrint      = document.getElementById("btnPrint");
+const tarifaInput   = document.getElementById("tarifa");
 
-function brMoney(v) {
-  return Number(v || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-}
+// KPIs
+const kpiKwhPeriodo    = document.getElementById("kpiKwhPeriodo");
+const kpiKwhPeriodoSub = document.getElementById("kpiKwhPeriodoSub");
+const kpiCusto         = document.getElementById("kpiCusto");
+const kpiPico          = document.getElementById("kpiPico");
+const kpiReducao       = document.getElementById("kpiReducao");
 
-function brNumber(v, digits = 1) {
-  return Number(v || 0).toLocaleString("pt-BR", {
-    minimumFractionDigits: digits,
-    maximumFractionDigits: digits
+// Tabela
+const tbodyResumo = document.querySelector("#tableResumo tbody");
+const tTotalKwh   = document.getElementById("tTotalKwh");
+const tTotalCost  = document.getElementById("tTotalCost");
+
+// Alertas
+const alertsList = document.getElementById("alertsList");
+
+// Status
+const statusTag = document.getElementById("statusTag");
+const subtitle  = document.getElementById("subtitle");
+
+// ── Estado global ────────────────────────────────────────────
+let chartKwh    = null;
+let chartRateio = null;
+
+// Dados carregados para exportação
+let dadosExport = [];
+
+// ── Utilitários ──────────────────────────────────────────────
+
+/** Formata número pt-BR com casas decimais */
+function fmt(n, casas = 2) {
+  return Number(n).toLocaleString("pt-BR", {
+    minimumFractionDigits: casas,
+    maximumFractionDigits: casas,
   });
 }
 
-function exportCsv(filename, rows) {
-  const csv = rows
-    .map(r => r.map(v => `"${String(v ?? "").replaceAll('"', '""')}"`).join(";"))
-    .join("\n");
-  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
+/** Formata moeda R$ */
+function fmtBRL(n) {
+  return "R$ " + fmt(n, 2);
 }
 
-let chartKwh   = null;
-let chartRateio = null;
-let resumoCache = [];
-let serieCache  = [];
-let alertasCache = [];
+/** Retorna { inicio, fim } em ISO 8601 conforme período selecionado */
+function getPeriodo() {
+  const tipo = selPeriodo.value;
+  const agora = new Date();
+  let inicio, fim;
 
-// ── helpers de período ──────────────────────────────────────────────────────
-
-function getPeriodoParams() {
-  const periodo = $("periodo").value;
-  if (periodo === "custom") {
-    return { inicio: $("dateFrom").value, fim: $("dateTo").value };
+  if (tipo === "custom") {
+    inicio = new Date(inputFrom.value + "T00:00:00");
+    fim    = new Date(inputTo.value   + "T23:59:59");
+  } else if (tipo === "7d") {
+    fim    = new Date(agora);
+    inicio = new Date(agora);
+    inicio.setDate(inicio.getDate() - 7);
+  } else if (tipo === "mtd") {
+    inicio = new Date(agora.getFullYear(), agora.getMonth(), 1);
+    fim    = new Date(agora);
+  } else {
+    // 30d (padrão)
+    fim    = new Date(agora);
+    inicio = new Date(agora);
+    inicio.setDate(inicio.getDate() - 30);
   }
-  const fim   = new Date();
-  const inicio = new Date();
-  if (periodo === "7d")  inicio.setDate(fim.getDate() - 7);
-  if (periodo === "30d") inicio.setDate(fim.getDate() - 30);
-  if (periodo === "mtd") inicio.setDate(1);
+
   return {
     inicio: inicio.toISOString(),
-    fim:    fim.toISOString()
+    fim:    fim.toISOString(),
   };
 }
 
-function buildQuery(params) {
-  const search = new URLSearchParams();
-  Object.entries(params).forEach(([k, v]) => {
-    if (v !== undefined && v !== null && v !== "") search.append(k, v);
-  });
-  return search.toString();
+/** Converte potência (W) para kWh considerando intervalo em horas */
+function wattsParaKwh(medicoes) {
+  if (!medicoes || medicoes.length < 2) return 0;
+  let totalKwh = 0;
+  for (let i = 1; i < medicoes.length; i++) {
+    const dt = (new Date(medicoes[i].timestamp) - new Date(medicoes[i - 1].timestamp)) / 3_600_000; // horas
+    const wMedia = ((medicoes[i].potencia || 0) + (medicoes[i - 1].potencia || 0)) / 2;
+    totalKwh += (wMedia / 1000) * dt;
+  }
+  return totalKwh;
 }
 
-// ── carregamento de selects ─────────────────────────────────────────────────
+/** Agrupa medições por dia (YYYY-MM-DD) → soma kWh */
+function agruparPorDia(medicoes) {
+  const mapa = {};
+  if (!medicoes || medicoes.length < 2) return mapa;
+
+  for (let i = 1; i < medicoes.length; i++) {
+    const dt = (new Date(medicoes[i].timestamp) - new Date(medicoes[i - 1].timestamp)) / 3_600_000;
+    const wMedia = ((medicoes[i].potencia || 0) + (medicoes[i - 1].potencia || 0)) / 2;
+    const kwh = (wMedia / 1000) * dt;
+    const dia = medicoes[i].timestamp.slice(0, 10);
+    mapa[dia] = (mapa[dia] || 0) + kwh;
+  }
+  return mapa;
+}
+
+/** Mostra/esconde indicador de status */
+function setStatus(msg, tipo = "ok") {
+  const dot = statusTag.querySelector(".dot");
+  dot.style.background = tipo === "ok" ? "#22c55e" : tipo === "warn" ? "#f59e0b" : "#ef4444";
+  statusTag.querySelector("span:last-child").textContent = msg;
+}
+
+// ── Fetch helpers ────────────────────────────────────────────
+
+async function apiFetch(path) {
+  const res = await fetch(API + path);
+  if (!res.ok) throw new Error(`Erro ${res.status} em ${path}`);
+  return res.json();
+}
+
+// ── Inicialização dos selects ────────────────────────────────
 
 async function carregarLocais() {
-  const select = $("local");
-  select.innerHTML = `<option value="">Carregando...</option>`;
-
-  const locais = await getJSON(`${API_BASE}/locais`);
-  select.innerHTML = "";
-
-  if (!locais.length) {
-    select.innerHTML = `<option value="">Nenhum local encontrado</option>`;
-    $("quadro").innerHTML   = `<option value="">Sem dados</option>`;
-    $("circuito").innerHTML = `<option value="">Sem dados</option>`;
-    return;
+  selLocal.innerHTML = '<option value="">Carregando...</option>';
+  try {
+    const locais = await apiFetch("/locais");
+    selLocal.innerHTML = '<option value="">Todos os locais</option>' +
+      locais.map(l => `<option value="${l.id}">${l.nome}</option>`).join("");
+  } catch (e) {
+    selLocal.innerHTML = '<option value="">Erro ao carregar</option>';
+    console.error("carregarLocais:", e);
   }
-
-  locais.forEach(local => {
-    const option = document.createElement("option");
-    option.value = local.id;
-    option.textContent = local.nome;
-    select.appendChild(option);
-  });
-
-  await carregarQuadros(select.value);
 }
 
 async function carregarQuadros(localId) {
-  const select = $("quadro");
-  select.innerHTML = `<option value="">Carregando...</option>`;
+  selQuadro.innerHTML   = '<option value="">Todos os quadros</option>';
+  selCircuito.innerHTML = '<option value="">Selecione um quadro</option>';
+  if (!localId) return;
 
-  if (!localId) {
-    select.innerHTML   = `<option value="">Selecione um local</option>`;
-    $("circuito").innerHTML = `<option value="">Selecione um quadro</option>`;
-    return;
+  selQuadro.innerHTML = '<option value="">Carregando...</option>';
+  try {
+    const quadros = await apiFetch(`/quadros?local_id=${localId}`);
+    selQuadro.innerHTML = '<option value="">Todos os quadros</option>' +
+      quadros.map(q => `<option value="${q.id}">${q.nome || "Quadro " + q.id}</option>`).join("");
+  } catch (e) {
+    selQuadro.innerHTML = '<option value="">Erro ao carregar</option>';
+    console.error("carregarQuadros:", e);
   }
-
-  const quadros = await getJSON(`${API_BASE}/quadros?local_id=${localId}`);
-  select.innerHTML = "";
-
-  if (!quadros.length) {
-    select.innerHTML   = `<option value="">Nenhum quadro encontrado</option>`;
-    $("circuito").innerHTML = `<option value="">Sem circuitos</option>`;
-    return;
-  }
-
-  quadros.forEach(q => {
-    const option = document.createElement("option");
-    option.value = q.id;
-    option.textContent = q.nome;
-    select.appendChild(option);
-  });
-
-  await carregarCircuitos(select.value);
 }
 
-async function carregarCircuitos(quadroId) {
-  const select = $("circuito");
-  select.innerHTML = `<option value="">Carregando...</option>`;
-
-  if (!quadroId) {
-    select.innerHTML = `<option value="">Selecione um quadro</option>`;
-    return;
-  }
-
-  const canais = await getJSON(`${API_BASE}/canais?quadro_id=${quadroId}`);
-  select.innerHTML = "";
-
-  const optTodos = document.createElement("option");
-  optTodos.value = "all";
-  optTodos.textContent = "Todos";
-  select.appendChild(optTodos);
-
-  canais.forEach(canal => {
-    const option = document.createElement("option");
-    option.value = canal.id;
-    option.textContent = canal.nome + (canal.fase ? ` — Fase ${canal.fase}` : "");
-    select.appendChild(option);
-  });
-}
-
-// ── KPIs ─────────────────────────────────────────────────────────────────────
-
-async function carregarKPIs() {
-  const tarifa  = Number($("tarifa").value || 0);
-  const { inicio, fim } = getPeriodoParams();
-  const canalId = $("circuito").value === "all" ? "" : $("circuito").value;
-
-  const params = buildQuery({ canal_id: canalId, inicio, fim, limit: 1000 });
-  const medicoes = await getJSON(`${API_BASE}/medicoes?${params}`);
-
-  // kWh simples: soma dos valores assumindo que cada medição representa 1 leitura em W
-  // ajuste a lógica conforme a granularidade real do seu hardware
-  const totalW  = medicoes.reduce((acc, m) => acc + Number(m.corrente || 0), 0);
-  const totalKwh = totalW / 1000;
-  const picoW   = medicoes.length ? Math.max(...medicoes.map(m => Number(m.valor || 0))) : 0;
-
-  $("kpiKwhPeriodo").textContent = `${brNumber(totalKwh, 1)} kWh`;
-  $("kpiKwhPeriodoSub").textContent = `${medicoes.length} leituras no período`;
-  $("kpiCusto").textContent = brMoney(totalKwh * tarifa);
-  $("kpiPico").textContent  = `${brNumber(picoW, 0)} W`;
-  $("kpiReducao").textContent = "—";
-}
-
-// ── Gráfico de série ──────────────────────────────────────────────────────────
-
-async function carregarSerieConsumo() {
-  const { inicio, fim } = getPeriodoParams();
-  const canalId = $("circuito").value === "all" ? "" : $("circuito").value;
-
-  const params = buildQuery({ canal_id: canalId, inicio, fim, limit: 1000 });
-  const medicoes = await getJSON(`${API_BASE}/medicoes?${params}`);
-  serieCache = medicoes;
-
-  // Agrupa por dia
-  const porDia = {};
-  medicoes.forEach(m => {
-    const dia = new Date(m.timestamp).toLocaleDateString("pt-BR");
-    porDia[dia] = (porDia[dia] || 0) + Number(m.corrente || 0) / 1000;
-  });
-
-  const labels  = Object.keys(porDia);
-  const valores = Object.values(porDia);
-
-  if (chartKwh) chartKwh.destroy();
-
-  chartKwh = new Chart($("chartKwh"), {
-    type: "line",
-    data: {
-      labels,
-      datasets: [{
-        label: "kWh/dia",
-        data: valores,
-        tension: 0.25,
-        pointRadius: 2,
-        pointHoverRadius: 4,
-        borderWidth: 2,
-        fill: true
-      }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: { legend: { display: false }, tooltip: { mode: "index", intersect: false } },
-      interaction: { mode: "index", intersect: false },
-      scales: {
-        x: { ticks: { color: "rgba(234,240,255,0.65)" }, grid: { color: "rgba(255,255,255,0.06)" } },
-        y: { ticks: { color: "rgba(234,240,255,0.65)" }, grid: { color: "rgba(255,255,255,0.06)" } }
-      }
-    }
-  });
-}
-
-// ── Rateio por canal ──────────────────────────────────────────────────────────
-
-async function carregarRateio() {
-  const tarifa = Number($("tarifa").value || 0);
-  const quadroId = $("quadro").value;
-  const { inicio, fim } = getPeriodoParams();
-
+async function carregarCanais(quadroId) {
+  selCircuito.innerHTML = '<option value="">Todos os circuitos</option>';
   if (!quadroId) return;
 
-  const canais = await getJSON(`${API_BASE}/canais?quadro_id=${quadroId}`);
+  selCircuito.innerHTML = '<option value="">Carregando...</option>';
+  try {
+    // Busca dispositivos do quadro, depois canais de cada dispositivo
+    const dispositivos = await apiFetch(`/dispositivos?quadro_id=${quadroId}`);
+    const canaisPromises = dispositivos.map(d => apiFetch(`/canais?dispositivo_id=${d.id}`));
+    const canaisArray = await Promise.all(canaisPromises);
+    const canais = canaisArray.flat();
 
-  const promessas = canais.map(async canal => {
-    const params = buildQuery({ canal_id: canal.id, inicio, fim, limit: 1000 });
-    const medicoes = await getJSON(`${API_BASE}/medicoes?${params}`);
-    const kwh = medicoes.reduce((acc, m) => acc + Number(m.corrente || 0), 0) / 1000;
-    return { area: canal.nome, kwh };
-  });
+    selCircuito.innerHTML = '<option value="">Todos os circuitos</option>' +
+      canais.map(c => {
+        const label = `Fase ${c.fase || "?"} • ${c.tipo || "canal"} (ID ${c.id})`;
+        return `<option value="${c.id}">${label}</option>`;
+      }).join("");
+  } catch (e) {
+    selCircuito.innerHTML = '<option value="">Erro ao carregar</option>';
+    console.error("carregarCanais:", e);
+  }
+}
 
-  const data = await Promise.all(promessas);
-  resumoCache = data;
+// ── Carregamento principal de dados ─────────────────────────
 
-  const total = data.reduce((acc, d) => acc + d.kwh, 0);
-  const dataComPct = data.map(d => ({
-    ...d,
-    percentual: total > 0 ? (d.kwh / total) * 100 : 0
-  }));
+async function carregarDados() {
+  setStatus("Carregando...", "warn");
+  btnAplicar.disabled = true;
+  btnAplicar.textContent = "Carregando...";
 
-  const labels  = dataComPct.map(d => d.area);
-  const valores = dataComPct.map(d => d.kwh);
+  const { inicio, fim } = getPeriodo();
+  const localId   = selLocal.value;
+  const quadroId  = selQuadro.value;
+  const canalId   = selCircuito.value;
+  const tarifa    = parseFloat(tarifaInput.value) || 0.95;
 
-  if (chartRateio) chartRateio.destroy();
+  // Atualiza subtitle
+  const d1 = new Date(inicio).toLocaleDateString("pt-BR");
+  const d2 = new Date(fim).toLocaleDateString("pt-BR");
+  subtitle.textContent = `${d1} → ${d2}`;
 
-  chartRateio = new Chart($("chartRateio"), {
-    type: "doughnut",
-    data: {
-      labels,
-      datasets: [{ data: valores, borderWidth: 0 }]
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
-      cutout: "70%"
+  try {
+    // ── 1. Coleta de canais relevantes ───────────────────────
+    let canaisIds = [];
+
+    if (canalId) {
+      canaisIds = [parseInt(canalId)];
+    } else if (quadroId) {
+      const dispositivos = await apiFetch(`/dispositivos?quadro_id=${quadroId}`);
+      const canaisArr = await Promise.all(dispositivos.map(d => apiFetch(`/canais?dispositivo_id=${d.id}`)));
+      canaisIds = canaisArr.flat().map(c => c.id);
+    } else if (localId) {
+      const quadros = await apiFetch(`/quadros?local_id=${localId}`);
+      for (const q of quadros) {
+        const dispositivos = await apiFetch(`/dispositivos?quadro_id=${q.id}`);
+        const canaisArr = await Promise.all(dispositivos.map(d => apiFetch(`/canais?dispositivo_id=${d.id}`)));
+        canaisIds.push(...canaisArr.flat().map(c => c.id));
+      }
+    } else {
+      // Tudo: busca todos locais → quadros → canais
+      const locais = await apiFetch("/locais");
+      for (const loc of locais) {
+        const quadros = await apiFetch(`/quadros?local_id=${loc.id}`);
+        for (const q of quadros) {
+          const dispositivos = await apiFetch(`/dispositivos?quadro_id=${q.id}`);
+          const canaisArr = await Promise.all(dispositivos.map(d => apiFetch(`/canais?dispositivo_id=${d.id}`)));
+          canaisIds.push(...canaisArr.flat().map(c => c.id));
+        }
+      }
     }
-  });
 
-  renderRateioLegend(dataComPct);
-  renderResumoTable(dataComPct, tarifa);
+    // Remove duplicatas
+    canaisIds = [...new Set(canaisIds)];
+
+    if (canaisIds.length === 0) {
+      mostrarVazio();
+      setStatus("Sem dados", "warn");
+      return;
+    }
+
+    // ── 2. Busca medições de todos os canais ─────────────────
+    const medicoesPorCanal = {};
+    await Promise.all(canaisIds.map(async (id) => {
+      const url = `/medicoes?canal_id=${id}&inicio=${encodeURIComponent(inicio)}&fim=${encodeURIComponent(fim)}&valido=true`;
+      try {
+        medicoesPorCanal[id] = await apiFetch(url);
+      } catch {
+        medicoesPorCanal[id] = [];
+      }
+    }));
+
+    // ── 3. Busca alertas do período ──────────────────────────
+    let alertas = [];
+    try {
+      // Tenta buscar alertas dos canais relevantes
+      const alertasArr = await Promise.all(
+        canaisIds.slice(0, 10).map(id => apiFetch(`/alertas?canal_id=${id}&resolvido=false`))
+      );
+      alertas = alertasArr.flat();
+    } catch { /* alertas opcionais */ }
+
+    // ── 4. Processa dados ────────────────────────────────────
+    processarEExibir(medicoesPorCanal, alertas, tarifa, inicio, fim, canaisIds);
+
+    setStatus("Atualizado agora", "ok");
+  } catch (e) {
+    console.error("carregarDados:", e);
+    setStatus("Erro ao carregar", "error");
+  } finally {
+    btnAplicar.disabled = false;
+    btnAplicar.textContent = "Aplicar filtros";
+  }
 }
 
-function renderRateioLegend(data) {
-  const wrap = $("rateioLegend");
-  wrap.innerHTML = "";
-  data.forEach(item => {
-    const div = document.createElement("div");
-    div.className = "legend-item";
-    div.innerHTML = `
-      <div class="legend-left">
-        <span class="swatch"></span>
-        <span>${item.area}</span>
-      </div>
-      <div>
-        <strong>${brNumber(item.kwh, 1)} kWh</strong>
-        <span style="color:rgba(234,240,255,0.65);font-size:12px;"> • ${brNumber(item.percentual, 0)}%</span>
-      </div>
-    `;
-    wrap.appendChild(div);
+// ── Processamento e exibição ─────────────────────────────────
+
+function processarEExibir(medicoesPorCanal, alertas, tarifa, inicio, fim, canaisIds) {
+  const canais = Object.keys(medicoesPorCanal);
+  if (canais.length === 0) { mostrarVazio(); return; }
+
+  // Agrega todas as medições para KPIs globais
+  const todasMedicoes = Object.values(medicoesPorCanal).flat();
+  todasMedicoes.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+
+  // Pico de potência
+  const pico = Math.max(...todasMedicoes.map(m => m.potencia || 0), 0);
+
+  // kWh total (por canal e soma)
+  const kwhPorCanal = {};
+  let kwhTotal = 0;
+  for (const [id, meds] of Object.entries(medicoesPorCanal)) {
+    const k = wattsParaKwh(meds);
+    kwhPorCanal[id] = k;
+    kwhTotal += k;
+  }
+
+  const custoTotal = kwhTotal * tarifa;
+
+  // Agrupa por dia (soma de todos canais)
+  const kwhPorDiaMapa = {};
+  for (const meds of Object.values(medicoesPorCanal)) {
+    const agrupado = agruparPorDia(meds);
+    for (const [dia, kwh] of Object.entries(agrupado)) {
+      kwhPorDiaMapa[dia] = (kwhPorDiaMapa[dia] || 0) + kwh;
+    }
+  }
+  const diasOrdenados = Object.keys(kwhPorDiaMapa).sort();
+  const valoresDia    = diasOrdenados.map(d => kwhPorDiaMapa[d]);
+
+  // Indicador de redução (compara primeira vs última metade do período)
+  let reducaoText = "—";
+  if (diasOrdenados.length >= 4) {
+    const meio   = Math.floor(diasOrdenados.length / 2);
+    const antes  = valoresDia.slice(0, meio).reduce((a, b) => a + b, 0);
+    const depois = valoresDia.slice(meio).reduce((a, b) => a + b, 0);
+    if (antes > 0) {
+      const diff = ((depois - antes) / antes) * 100;
+      reducaoText = (diff <= 0 ? "↓ " : "↑ +") + fmt(Math.abs(diff), 1) + "%";
+    }
+  }
+
+  // ── Atualiza KPIs ──────────────────────────────────────────
+  kpiKwhPeriodo.textContent    = fmt(kwhTotal, 1) + " kWh";
+  kpiKwhPeriodoSub.textContent = diasOrdenados.length + " dias analisados";
+  kpiCusto.textContent         = fmtBRL(custoTotal);
+  kpiPico.textContent          = fmt(pico, 0) + " W";
+  kpiReducao.textContent       = reducaoText;
+
+  // ── Gráfico de consumo diário ──────────────────────────────
+  const labelsDia = diasOrdenados.map(d => {
+    const [, m, dia] = d.split("-");
+    return `${dia}/${m}`;
   });
-}
 
-function renderResumoTable(data, tarifa) {
-  const tbody = $("tableResumo").querySelector("tbody");
-  tbody.innerHTML = "";
-  let totalKwh = 0, totalCost = 0;
+  renderChartKwh(labelsDia, valoresDia, tarifa);
 
-  data.forEach(item => {
-    const kwh  = item.kwh;
-    const cost = kwh * tarifa;
-    totalKwh  += kwh;
-    totalCost += cost;
+  // ── Rateio por canal ───────────────────────────────────────
+  // Tenta nomear canais (usa ID como fallback)
+  const labelsRateio = canais.map(id => `Canal ${id}`);
+  const valoresRateio = canais.map(id => kwhPorCanal[id]);
+
+  renderChartRateio(labelsRateio, valoresRateio, kwhTotal);
+
+  // ── Tabela resumo ──────────────────────────────────────────
+  dadosExport = [];
+  tbodyResumo.innerHTML = "";
+
+  canais.forEach((id, i) => {
+    const kwh  = kwhPorCanal[id];
+    const pct  = kwhTotal > 0 ? (kwh / kwhTotal) * 100 : 0;
+    const custo = kwh * tarifa;
+
+    dadosExport.push({ area: labelsRateio[i], kwh, pct, custo });
 
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td>${item.area}</td>
-      <td>${brNumber(kwh, 1)}</td>
-      <td>${brNumber(item.percentual, 1)}%</td>
-      <td>${brMoney(cost)}</td>
+      <td>${labelsRateio[i]}</td>
+      <td>${fmt(kwh, 2)}</td>
+      <td>${fmt(pct, 1)}%</td>
+      <td>${fmtBRL(custo)}</td>
     `;
-    tbody.appendChild(tr);
+    tbodyResumo.appendChild(tr);
   });
 
-  $("tTotalKwh").textContent  = brNumber(totalKwh, 1);
-  $("tTotalCost").textContent = brMoney(totalCost);
+  tTotalKwh.textContent  = fmt(kwhTotal, 2);
+  tTotalCost.textContent = fmtBRL(custoTotal);
+
+  // ── Alertas ────────────────────────────────────────────────
+  renderAlertas(alertas);
 }
 
-// ── Alertas financeiros ───────────────────────────────────────────────────────
+function mostrarVazio() {
+  kpiKwhPeriodo.textContent = "—";
+  kpiCusto.textContent      = "—";
+  kpiPico.textContent       = "—";
+  kpiReducao.textContent    = "—";
+  tbodyResumo.innerHTML     = '<tr><td colspan="4" style="text-align:center;color:var(--color-text-tertiary,#888)">Sem dados para o período</td></tr>';
+  alertsList.innerHTML      = '<li style="color:var(--color-text-tertiary,#888)">Nenhum alerta encontrado</li>';
+  if (chartKwh)    { chartKwh.data.labels = []; chartKwh.data.datasets[0].data = []; chartKwh.update(); }
+  if (chartRateio) { chartRateio.data.labels = []; chartRateio.data.datasets[0].data = []; chartRateio.update(); }
+}
 
-async function carregarAlertas() {
-  const quadroId = $("quadro").value;
-  if (!quadroId) { $("alertsList").innerHTML = ""; return; }
+// ── Chart.js ─────────────────────────────────────────────────
 
-  const canais = await getJSON(`${API_BASE}/canais?quadro_id=${quadroId}`);
-  const ul = $("alertsList");
-  ul.innerHTML = "";
+const CORES = [
+  "#10b981","#3b82f6","#f59e0b","#ef4444","#8b5cf6",
+  "#06b6d4","#f97316","#ec4899","#84cc16","#6366f1",
+];
 
-  if (!canais.length) {
-    ul.innerHTML = `<li class="alert"><p>Nenhum canal encontrado neste quadro.</p></li>`;
+function renderChartKwh(labels, valores, tarifa) {
+  const ctx = document.getElementById("chartKwh").getContext("2d");
+
+  if (chartKwh) chartKwh.destroy();
+
+  chartKwh = new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels,
+      datasets: [
+        {
+          label: "kWh",
+          data: valores,
+          backgroundColor: "rgba(16,185,129,0.25)",
+          borderColor: "#10b981",
+          borderWidth: 2,
+          borderRadius: 4,
+          yAxisID: "yKwh",
+        },
+        {
+          label: "Custo (R$)",
+          data: valores.map(v => +(v * tarifa).toFixed(2)),
+          type: "line",
+          borderColor: "#f59e0b",
+          backgroundColor: "rgba(245,158,11,0.08)",
+          borderWidth: 2,
+          pointRadius: 3,
+          tension: 0.4,
+          yAxisID: "yCusto",
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: true,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { position: "top" },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              if (ctx.dataset.yAxisID === "yCusto")
+                return " " + fmtBRL(ctx.parsed.y);
+              return " " + fmt(ctx.parsed.y, 2) + " kWh";
+            },
+          },
+        },
+      },
+      scales: {
+        yKwh: {
+          position: "left",
+          title: { display: true, text: "kWh" },
+          beginAtZero: true,
+        },
+        yCusto: {
+          position: "right",
+          title: { display: true, text: "R$" },
+          beginAtZero: true,
+          grid: { drawOnChartArea: false },
+        },
+      },
+    },
+  });
+}
+
+function renderChartRateio(labels, valores, total) {
+  const ctx = document.getElementById("chartRateio").getContext("2d");
+  if (chartRateio) chartRateio.destroy();
+
+  const cores = labels.map((_, i) => CORES[i % CORES.length]);
+
+  chartRateio = new Chart(ctx, {
+    type: "doughnut",
+    data: {
+      labels,
+      datasets: [{
+        data: valores,
+        backgroundColor: cores,
+        borderColor: "transparent",
+        hoverOffset: 6,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: true,
+      cutout: "68%",
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              const pct = total > 0 ? ((ctx.parsed / total) * 100).toFixed(1) : 0;
+              return ` ${fmt(ctx.parsed, 2)} kWh (${pct}%)`;
+            },
+          },
+        },
+      },
+    },
+  });
+
+  // Legenda customizada
+  const legend = document.getElementById("rateioLegend");
+  legend.innerHTML = labels.map((l, i) => {
+    const pct = total > 0 ? ((valores[i] / total) * 100).toFixed(1) : 0;
+    return `
+      <div class="leg-item" style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:13px">
+        <span style="width:12px;height:12px;border-radius:3px;background:${cores[i]};flex-shrink:0"></span>
+        <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${l}</span>
+        <span style="font-weight:500">${pct}%</span>
+      </div>`;
+  }).join("");
+}
+
+function renderAlertas(alertas) {
+  alertsList.innerHTML = "";
+
+  if (!alertas || alertas.length === 0) {
+    alertsList.innerHTML = '<li style="color:var(--color-text-secondary,#666);padding:8px 0">✓ Nenhum alerta ativo no período</li>';
     return;
   }
 
-  const promessas = canais.map(c =>
-    getJSON(`${API_BASE}/alertas?canal_id=${c.id}&resolvido=false&limit=10`)
-  );
-  const resultados = await Promise.all(promessas);
-  const alertas = resultados.flat();
-  alertasCache = alertas;
+  const icones = {
+    sobrecorrente:      { ico: "⚡", cor: "#ef4444" },
+    consumo_fora_horario: { ico: "🌙", cor: "#f59e0b" },
+    queda_brusca:       { ico: "📉", cor: "#3b82f6" },
+  };
 
-  if (!alertas.length) {
-    ul.innerHTML = `<li class="alert"><p>Nenhum ponto de atenção encontrado.</p></li>`;
-    return;
-  }
-
-  alertas.forEach(alerta => {
-    const li = document.createElement("li");
-    li.className = "alert";
-
-    let nivelClass = "";
-    const sev = String(alerta.nivel || "").toLowerCase();
-    if (sev === "critica" || sev === "alta") nivelClass = "danger";
-    if (sev === "media") nivelClass = "warn";
-
+  alertas.slice(0, 20).forEach(a => {
+    const info = icones[a.tipo] || { ico: "⚠", cor: "#888" };
+    const ts   = a.timestamp ? new Date(a.timestamp).toLocaleString("pt-BR") : "";
+    const li   = document.createElement("li");
+    li.style.cssText = `display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid rgba(0,0,0,0.06)`;
     li.innerHTML = `
-      <div class="title">
-        <span>${alerta.tipo}</span>
-        <span class="tag ${nivelClass}">${alerta.nivel}</span>
-      </div>
-      <p>${alerta.mensagem || ""}</p>
-    `;
-    ul.appendChild(li);
-  });
-}
-
-// ── painel completo ───────────────────────────────────────────────────────────
-
-function atualizarSubtitulo() {
-  const locText = $("local").selectedOptions[0]?.textContent || "-";
-  const qText   = $("quadro").selectedOptions[0]?.textContent || "-";
-  const cText   = $("circuito").selectedOptions[0]?.textContent || "Todos";
-  $("subtitle").textContent = `Filtro: ${locText} • ${qText} • ${cText}`;
-}
-
-function handlePeriodo() {
-  const p = $("periodo").value;
-  $("customRange").style.display = (p === "custom") ? "grid" : "none";
-}
-
-async function carregarPainel() {
-  atualizarSubtitulo();
-  await carregarKPIs();
-  await carregarSerieConsumo();
-  await carregarRateio();
-  await carregarAlertas();
-  $("statusTag").querySelector("span:last-child").textContent = "Atualizado agora";
-}
-
-function configurarExportacao() {
-  $("btnExportCsv").addEventListener("click", () => {
-    const tarifa = Number($("tarifa").value || 0);
-    const rows = [["Área", "kWh", "%", "Custo(R$)"]];
-    resumoCache.forEach(item => {
-      rows.push([
-        item.area,
-        Number(item.kwh || 0).toFixed(2),
-        Number(item.percentual || 0).toFixed(2),
-        (Number(item.kwh || 0) * tarifa).toFixed(2)
-      ]);
-    });
-    exportCsv("financeiro_rateio.csv", rows);
+      <span style="font-size:16px;flex-shrink:0">${info.ico}</span>
+      <div>
+        <div style="font-weight:500;color:${info.cor};font-size:13px">${a.tipo?.replace(/_/g," ") ?? "Alerta"} — Nível: ${a.nivel ?? "?"}</div>
+        <div style="font-size:12px;color:#666">Canal ${a.canal_id} • Valor: ${fmt(a.valor ?? 0,1)} • Limite: ${fmt(a.limite ?? 0,1)}</div>
+        <div style="font-size:11px;color:#999">${ts}</div>
+      </div>`;
+    alertsList.appendChild(li);
   });
 
-  $("btnPrint").addEventListener("click", () => window.print());
+  if (alertas.length > 20) {
+    const mais = document.createElement("li");
+    mais.style.cssText = "font-size:12px;color:#888;padding:6px 0";
+    mais.textContent = `+ ${alertas.length - 20} alertas adicionais`;
+    alertsList.appendChild(mais);
+  }
 }
 
-// ── init ──────────────────────────────────────────────────────────────────────
+// ── Exportação CSV ───────────────────────────────────────────
 
-document.addEventListener("DOMContentLoaded", async () => {
-  try {
-    handlePeriodo();
-    await carregarLocais();
-    await carregarPainel();
+function exportarCSV() {
+  if (dadosExport.length === 0) {
+    alert("Nenhum dado para exportar. Aplique os filtros primeiro.");
+    return;
+  }
 
-    $("periodo").addEventListener("change",   async () => { handlePeriodo(); await carregarPainel(); });
-    $("local").addEventListener("change",     async (e) => { await carregarQuadros(e.target.value); await carregarPainel(); });
-    $("quadro").addEventListener("change",    async (e) => { await carregarCircuitos(e.target.value); await carregarPainel(); });
-    $("circuito").addEventListener("change",  async () => { await carregarPainel(); });
-    $("btnAplicar").addEventListener("click", async () => { await carregarPainel(); });
-    $("tarifa").addEventListener("change",    async () => { await carregarKPIs(); await carregarRateio(); });
-    $("dateFrom").addEventListener("change",  async () => { if ($("periodo").value === "custom") await carregarPainel(); });
-    $("dateTo").addEventListener("change",    async () => { if ($("periodo").value === "custom") await carregarPainel(); });
+  const { inicio, fim } = getPeriodo();
+  const linhas = [
+    ["Área", "kWh (período)", "% do total", "Custo estimado (R$)"],
+    ...dadosExport.map(r => [
+      r.area,
+      r.kwh.toFixed(3),
+      r.pct.toFixed(2) + "%",
+      r.custo.toFixed(2),
+    ]),
+    [],
+    ["", "Total:", dadosExport.reduce((s, r) => s + r.kwh, 0).toFixed(3),
+          dadosExport.reduce((s, r) => s + r.custo, 0).toFixed(2)],
+    [],
+    [`Período: ${new Date(inicio).toLocaleDateString("pt-BR")} a ${new Date(fim).toLocaleDateString("pt-BR")}`],
+    [`Tarifa: R$ ${tarifaInput.value}/kWh`],
+    [`Gerado em: ${new Date().toLocaleString("pt-BR")}`],
+  ];
 
-    configurarExportacao();
+  const csv = linhas.map(l => l.join(";")).join("\n");
+  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href     = url;
+  a.download = `safe-energy-financeiro-${new Date().toISOString().slice(0,10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
-  } catch (error) {
-    console.error(error);
-    alert("Erro ao carregar dados do painel financeiro.");
+// ── Impressão ────────────────────────────────────────────────
+
+function gerarResumoImpressao() {
+  const { inicio, fim } = getPeriodo();
+  const tarifa = parseFloat(tarifaInput.value) || 0.95;
+
+  const linhas = dadosExport.map(r => `
+    <tr>
+      <td>${r.area}</td>
+      <td>${fmt(r.kwh, 2)} kWh</td>
+      <td>${fmt(r.pct, 1)}%</td>
+      <td>${fmtBRL(r.custo)}</td>
+    </tr>`).join("");
+
+  const totalKwh  = dadosExport.reduce((s, r) => s + r.kwh, 0);
+  const totalCost = dadosExport.reduce((s, r) => s + r.custo, 0);
+
+  const janela = window.open("", "_blank");
+  janela.document.write(`<!doctype html><html lang="pt-BR"><head>
+    <meta charset="utf-8">
+    <title>Safe Energy • Relatório Financeiro</title>
+    <style>
+      body { font-family: Arial, sans-serif; margin: 40px; color: #222; }
+      h1 { font-size: 22px; margin-bottom: 4px; }
+      .meta { color: #666; font-size: 13px; margin-bottom: 24px; }
+      table { width: 100%; border-collapse: collapse; font-size: 14px; }
+      th { background: #f3f4f6; padding: 10px 12px; text-align: left; border-bottom: 2px solid #ddd; }
+      td { padding: 9px 12px; border-bottom: 1px solid #eee; }
+      tfoot td { font-weight: bold; background: #f9fafb; border-top: 2px solid #ddd; }
+      .kpis { display: flex; gap: 20px; margin-bottom: 28px; }
+      .kpi { border: 1px solid #e5e7eb; border-radius: 8px; padding: 14px 18px; flex: 1; }
+      .kpi-label { font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: .5px; }
+      .kpi-value { font-size: 24px; font-weight: bold; margin-top: 4px; }
+      @media print { body { margin: 20px; } }
+    </style>
+  </head><body>
+    <h1>Safe Energy • Relatório Financeiro</h1>
+    <div class="meta">
+      Período: ${new Date(inicio).toLocaleDateString("pt-BR")} a ${new Date(fim).toLocaleDateString("pt-BR")} &nbsp;|&nbsp;
+      Tarifa: R$ ${tarifa.toFixed(2)}/kWh &nbsp;|&nbsp;
+      Gerado em: ${new Date().toLocaleString("pt-BR")}
+    </div>
+    <div class="kpis">
+      <div class="kpi"><div class="kpi-label">Consumo total</div><div class="kpi-value">${fmt(totalKwh, 1)} kWh</div></div>
+      <div class="kpi"><div class="kpi-label">Custo estimado</div><div class="kpi-value">${fmtBRL(totalCost)}</div></div>
+      <div class="kpi"><div class="kpi-label">Pico registrado</div><div class="kpi-value">${kpiPico.textContent}</div></div>
+      <div class="kpi"><div class="kpi-label">Indicador de redução</div><div class="kpi-value">${kpiReducao.textContent}</div></div>
+    </div>
+    <table>
+      <thead><tr><th>Área</th><th>kWh</th><th>%</th><th>Custo (R$)</th></tr></thead>
+      <tbody>${linhas || '<tr><td colspan="4">Sem dados</td></tr>'}</tbody>
+      <tfoot>
+        <tr>
+          <td>Total</td>
+          <td>${fmt(totalKwh, 2)} kWh</td>
+          <td>100%</td>
+          <td>${fmtBRL(totalCost)}</td>
+        </tr>
+      </tfoot>
+    </table>
+    <script>window.onload = () => window.print();<\/script>
+  </body></html>`);
+  janela.document.close();
+}
+
+// ── Eventos ──────────────────────────────────────────────────
+
+selPeriodo.addEventListener("change", () => {
+  customRange.style.display = selPeriodo.value === "custom" ? "flex" : "none";
+});
+
+selLocal.addEventListener("change", () => {
+  carregarQuadros(selLocal.value);
+});
+
+selQuadro.addEventListener("change", () => {
+  carregarCanais(selQuadro.value);
+});
+
+tarifaInput.addEventListener("change", () => {
+  // Recalcula custo sem recarregar da API
+  const tarifa = parseFloat(tarifaInput.value) || 0.95;
+  if (dadosExport.length === 0) return;
+
+  const totalKwh  = dadosExport.reduce((s, r) => s + r.kwh, 0);
+  const totalCost = totalKwh * tarifa;
+
+  kpiCusto.textContent   = fmtBRL(totalCost);
+  tTotalCost.textContent = fmtBRL(totalCost);
+
+  // Atualiza tabela
+  const linhas = tbodyResumo.querySelectorAll("tr");
+  dadosExport.forEach((r, i) => {
+    r.custo = r.kwh * tarifa;
+    if (linhas[i]) linhas[i].cells[3].textContent = fmtBRL(r.custo);
+  });
+
+  // Atualiza linha do custo no gráfico de barras
+  if (chartKwh) {
+    chartKwh.data.datasets[1].data = chartKwh.data.datasets[0].data.map(v => +(v * tarifa).toFixed(2));
+    chartKwh.update();
   }
 });
+
+btnAplicar.addEventListener("click", carregarDados);
+btnExportCsv.addEventListener("click", exportarCSV);
+btnPrint.addEventListener("click", gerarResumoImpressao);
+
+// ── Boot ─────────────────────────────────────────────────────
+
+(async () => {
+  await carregarLocais();
+  await carregarDados();
+})();
