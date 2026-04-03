@@ -135,7 +135,7 @@ async function apiFetch(path) {
 async function carregarLocais() {
   selLocal.innerHTML = '<option value="">Carregando...</option>';
   try {
-    const locais = await apiFetch("/locais");
+    const locais = await apiFetch("/locais/");
     selLocal.innerHTML = '<option value="">Todos os locais</option>' +
       locais.map(l => `<option value="${l.id}">${l.nome}</option>`).join("");
   } catch (e) {
