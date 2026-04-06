@@ -3,7 +3,16 @@
    Integração completa com a API: https://backendsafe.onrender.com
    ============================================================ */
 
-const API = "https://backendsafe.onrender.com/docs";
+const API = "https://backendsafe.onrender.com";
+
+async function apiFetch(path) {
+  const pathComBarra = path.includes("?")
+    ? path.replace("?", "/?")
+    : path + "/";
+  const res = await fetch(API + pathComBarra);
+  if (!res.ok) throw new Error(`Erro ${res.status} em ${path}`);
+  return res.json();
+}
 
 // ── Referências DOM ──────────────────────────────────────────
 const selPeriodo    = document.getElementById("periodo");
@@ -124,18 +133,12 @@ function setStatus(msg, tipo = "ok") {
 
 // ── Fetch helpers ────────────────────────────────────────────
 
-async function apiFetch(path) {
-  const res = await fetch(API + path);
-  if (!res.ok) throw new Error(`Erro ${res.status} em ${path}`);
-  return res.json();
-}
-
 // ── Inicialização dos selects ────────────────────────────────
 
 async function carregarLocais() {
   selLocal.innerHTML = '<option value="">Carregando...</option>';
   try {
-    const locais = await apiFetch("/locais/");
+    const locais = await apiFetch("/locais");
     selLocal.innerHTML = '<option value="">Todos os locais</option>' +
       locais.map(l => `<option value="${l.id}">${l.nome}</option>`).join("");
   } catch (e) {
