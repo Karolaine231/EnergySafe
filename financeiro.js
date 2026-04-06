@@ -3,7 +3,7 @@
    Integração completa com a API: https://backendsafe.onrender.com
    ============================================================ */
 
-const API = "https://backendsafe.onrender.com";
+const API = "https://backendsafe.onrender.com/docs";
 
 // ── Referências DOM ──────────────────────────────────────────
 const selPeriodo    = document.getElementById("periodo");
