@@ -23,11 +23,13 @@ function asArray(payload) {
 
 function buildUrl(path, params = {}) {
   const url = new URL(API_BASE + path);
+
   Object.entries(params).forEach(([key, value]) => {
     if (value !== undefined && value !== null && value !== "") {
       url.searchParams.set(key, value);
     }
   });
+
   return url.toString();
 }
 
@@ -55,7 +57,11 @@ async function getJSON(path, params = {}, retries = 2) {
       return await response.json();
     } catch (error) {
       clearTimeout(timeout);
-      if (attempt === retries) throw error;
+
+      if (attempt === retries) {
+        throw error;
+      }
+
       await new Promise(r => setTimeout(r, 1500 * (attempt + 1)));
     }
   }
@@ -70,6 +76,7 @@ function normalizeTimestamp(dt) {
 
 function formatDt(dt) {
   if (!dt) return "-";
+
   const d = new Date(normalizeTimestamp(dt));
   if (Number.isNaN(d.getTime())) return "-";
 
@@ -84,8 +91,10 @@ function formatDt(dt) {
 
 function formatDateBR(dt) {
   if (!dt) return "-";
+
   const d = new Date(`${dt}T00:00:00`);
   if (Number.isNaN(d.getTime())) return dt;
+
   return d.toLocaleDateString("pt-BR");
 }
 
@@ -126,6 +135,7 @@ function setStatusText(msg, tipo = "ok") {
 function showFeedback(msg, tipo = "info") {
   const box = $("feedbackBox");
   if (!box) return;
+
   box.style.display = "block";
   box.textContent = msg;
   box.className = "feedback " + tipo;
@@ -134,6 +144,7 @@ function showFeedback(msg, tipo = "info") {
 function hideFeedback() {
   const box = $("feedbackBox");
   if (!box) return;
+
   box.style.display = "none";
   box.textContent = "";
   box.className = "feedback";
@@ -141,7 +152,11 @@ function hideFeedback() {
 
 function setButtonLoading(btn, loading, textLoading = "Carregando...") {
   if (!btn) return;
-  if (!btn.dataset.originalText) btn.dataset.originalText = btn.textContent;
+
+  if (!btn.dataset.originalText) {
+    btn.dataset.originalText = btn.textContent;
+  }
+
   btn.disabled = loading;
   btn.textContent = loading ? textLoading : btn.dataset.originalText;
 }
@@ -227,9 +242,11 @@ async function carregarLocais() {
   if (!select) return;
 
   select.innerHTML = `<option value="">Carregando...</option>`;
+
   locaisCache = asArray(await getJSON("/locais")).map(adaptLocal);
 
   select.innerHTML = `<option value="">Todos os locais</option>`;
+
   locaisCache.forEach(local => {
     const option = document.createElement("option");
     option.value = local.id;
@@ -255,6 +272,7 @@ async function carregarQuadros(localId = "") {
   quadrosCache = asArray(await getJSON("/quadros", { local_id: localId })).map(adaptQuadro);
 
   select.innerHTML = `<option value="">Todos os quadros</option>`;
+
   quadrosCache.forEach(quadro => {
     const option = document.createElement("option");
     option.value = quadro.id;
@@ -278,6 +296,7 @@ async function carregarDispositivos(quadroId = "") {
   dispositivosCache = asArray(await getJSON("/dispositivos", { quadro_id: quadroId })).map(adaptDispositivo);
 
   select.innerHTML = `<option value="">Todos os dispositivos</option>`;
+
   dispositivosCache.forEach(dispositivo => {
     const option = document.createElement("option");
     option.value = dispositivo.id;
@@ -333,38 +352,50 @@ function getConsumoAgrupadoPorData() {
 ------------------------------------------------------------ */
 function carregarKPIsETabela() {
   const dispositivoId = $("dispositivo")?.value || "";
-  const dispositivo = dispositivosCache.find(d => String(d.id) === String(dispositivoId));
   const agrupado = getConsumoAgrupadoPorData();
   const ultimo = agrupado[agrupado.length - 1] || null;
   const alertasAtivos = alertasCache.filter(a => !a.resolvido).length;
 
-  $("kpiOnline").textContent = dispositivo && ultimo ? "1" : "0";
-  $("kpiOffline").textContent = dispositivo && !ultimo ? "1" : "0";
-  $("kpiAtraso").textContent = dispositivo ? "1" : "0";
-  $("kpiAlerts").textContent = String(alertasAtivos);
+  const ativos = dispositivosCache.filter(d => d.ativo).length;
+  const inativos = dispositivosCache.filter(d => !d.ativo).length;
 
-  const tbody = $("tableSensors")?.querySelector("tbody");
+  if ($("kpiOnline")) $("kpiOnline").textContent = String(ativos);
+  if ($("kpiOffline")) $("kpiOffline").textContent = String(inativos);
+  if ($("kpiAtraso")) $("kpiAtraso").textContent = "0";
+  if ($("kpiAlerts")) $("kpiAlerts").textContent = String(alertasAtivos);
+
+  const tbody = $("tableSensors")?.querySelector("tbody") || $("tableDevices")?.querySelector("tbody");
   if (!tbody) return;
 
   tbody.innerHTML = "";
 
-  if (!dispositivo) {
-    tbody.innerHTML = `<tr><td colspan="4">Selecione um dispositivo.</td></tr>`;
+  if (!dispositivosCache.length) {
+    tbody.innerHTML = `<tr><td colspan="4">Nenhum dispositivo encontrado.</td></tr>`;
     return;
   }
 
-  tbody.innerHTML = `
-    <tr>
+  let lista = [...dispositivosCache];
+
+  if (dispositivoId) {
+    lista = lista.filter(d => String(d.id) === String(dispositivoId));
+  }
+
+  lista.forEach(dispositivo => {
+    const tr = document.createElement("tr");
+
+    tr.innerHTML = `
       <td>${dispositivo.nome}</td>
-      <td><span class="tag warn">VISÃO GERAL</span></td>
+      <td><span class="tag ${dispositivo.ativo ? "" : "warn"}">${dispositivo.ativo ? "ATIVO" : "INATIVO"}</span></td>
       <td>${ultimo ? formatDateBR(ultimo.data) : "-"}</td>
       <td>${ultimo ? Number(ultimo.kwh).toFixed(2) : "0.00"} kWh</td>
-    </tr>
-  `;
+    `;
+
+    tbody.appendChild(tr);
+  });
 }
 
 /* ------------------------------------------------------------
-   Alertas e eventos
+   Alertas e histórico
 ------------------------------------------------------------ */
 function carregarAlertasUI() {
   const ul = $("alertsList");
@@ -385,6 +416,7 @@ function carregarAlertasUI() {
 
     let nivelClass = "";
     const nivel = String(alerta.nivel || "").toLowerCase();
+
     if (nivel.includes("crit")) nivelClass = "danger";
     else if (nivel.includes("avis")) nivelClass = "warn";
 
@@ -420,15 +452,13 @@ function carregarEventos() {
     return;
   }
 
-  const nomeDispositivo = $("dispositivo")?.selectedOptions?.[0]?.textContent || "-";
-
   historico.slice(0, 50).forEach(evento => {
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${formatDt(evento.timestamp)}</td>
       <td>${evento.tipo}</td>
       <td>${evento.nivel}</td>
-      <td>${nomeDispositivo}</td>
+      <td>Geral</td>
       <td>${evento.mensagem || `Valor ${evento.valor || 0} / Limite ${evento.limite || 0}`}</td>
     `;
     tbody.appendChild(tr);
@@ -494,9 +524,12 @@ function carregarGrafico() {
 function atualizarSubtitulo() {
   const localText = $("local")?.selectedOptions?.[0]?.textContent || "-";
   const quadroText = $("quadro")?.selectedOptions?.[0]?.textContent || "-";
-  const dispositivoText = $("dispositivo")?.selectedOptions?.[0]?.textContent || "-";
+  const dispositivoText = $("dispositivo")?.selectedOptions?.[0]?.textContent || "Todos os dispositivos";
 
-  $("subtitle").textContent = `Filtro: ${localText} • ${quadroText} • ${dispositivoText}`;
+  const subtitle = $("subtitle");
+  if (subtitle) {
+    subtitle.textContent = `Filtro: ${localText} • ${quadroText} • ${dispositivoText}`;
+  }
 }
 
 async function carregarPainelCompleto() {
@@ -506,9 +539,9 @@ async function carregarPainelCompleto() {
   setButtonLoading($("btnAplicar"), true);
 
   try {
-    const dispositivoId = $("dispositivo")?.value || "";
+    const quadroId = $("quadro")?.value || "";
 
-    if (!dispositivoId) {
+    if (!quadroId) {
       consumoCache = [];
       alertasCache = [];
       eventosCache = [];
@@ -516,12 +549,12 @@ async function carregarPainelCompleto() {
       carregarGrafico();
       carregarEventos();
       carregarAlertasUI();
-      setStatusText("Selecione um dispositivo", "warn");
+      setStatusText("Selecione um quadro", "warn");
       return;
     }
 
     showFeedback(
-      "Exibindo visão geral baseada nos endpoints disponíveis da API. O gráfico usa o consumo diário retornado por /consumo.",
+      "Exibindo visão geral do quadro. O filtro de dispositivo refina apenas a tabela.",
       "info"
     );
 
@@ -543,27 +576,31 @@ async function carregarPainelCompleto() {
 
 function configurarExportacoes() {
   $("btnExportSensors")?.addEventListener("click", () => {
-    const dispositivo = $("dispositivo")?.selectedOptions?.[0]?.textContent || "-";
     const agrupado = getConsumoAgrupadoPorData();
-
     const rows = [["Dispositivo", "Data", "Consumo (kWh)"]];
+
+    const nomeSelecionado = $("dispositivo")?.selectedOptions?.[0]?.textContent || "Todos os dispositivos";
+
     agrupado.forEach(item => {
-      rows.push([dispositivo, formatDateBR(item.data), Number(item.kwh || 0).toFixed(2)]);
+      rows.push([
+        nomeSelecionado,
+        formatDateBR(item.data),
+        Number(item.kwh || 0).toFixed(2)
+      ]);
     });
 
     exportCsv("dispositivo_consumo.csv", rows);
   });
 
   $("btnExportEvents")?.addEventListener("click", () => {
-    const dispositivo = $("dispositivo")?.selectedOptions?.[0]?.textContent || "-";
+    const rows = [["DataHora", "Tipo", "Severidade", "Escopo", "Descricao"]];
 
-    const rows = [["DataHora", "Tipo", "Severidade", "Dispositivo", "Descricao"]];
     eventosCache.forEach(evento => {
       rows.push([
         formatDt(evento.timestamp),
         evento.tipo || "—",
         evento.nivel || "—",
-        dispositivo,
+        "Geral",
         evento.mensagem || "—"
       ]);
     });
@@ -598,7 +635,8 @@ function configurarEventosUI() {
   });
 
   $("dispositivo")?.addEventListener("change", async () => {
-    await carregarPainelCompleto();
+    carregarKPIsETabela();
+    atualizarSubtitulo();
   });
 
   $("eventFilter")?.addEventListener("change", async () => {
