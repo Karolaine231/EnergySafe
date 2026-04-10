@@ -7,8 +7,13 @@
 
   <link rel="icon" type="image/png" sizes="32x32" href="EnergiaVerdeLogo.png">
   <link rel="stylesheet" href="manutencao.css" />
-
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+  <style>
+    .feedback {
+      white-space: pre-wrap;
+    }
+  </style>
 </head>
 
 <body>
@@ -19,12 +24,12 @@
         <img src="EnergiaVerdeLogo.png" class="sb-logo" alt="Energia Verde">
         <div class="sb-title">
           <div class="name">Safe Energy</div>
-          <div class="sub">Manutenção • Sensores e Alertas</div>
+          <div class="sub">Manutenção • Consumo diário e alertas</div>
         </div>
       </div>
 
       <div class="sb-section">
-        <div class="sb-label">Filtro</div>
+        <div class="sb-label">Filtros</div>
 
         <label class="field">
           <span>Local</span>
@@ -36,14 +41,14 @@
         <label class="field">
           <span>Quadro</span>
           <select id="quadro">
-            <option value="">Selecione um local</option>
+            <option value="">Todos os quadros</option>
           </select>
         </label>
 
         <label class="field">
-          <span>Sensor</span>
-          <select id="sensor">
-            <option value="">Selecione um quadro</option>
+          <span>Dispositivo</span>
+          <select id="dispositivo">
+            <option value="">Todos os dispositivos</option>
           </select>
         </label>
 
@@ -53,7 +58,7 @@
       <div class="sb-section">
         <div class="sb-label">Ações</div>
         <button class="btn btn-primary" id="btnRefresh">Atualizar</button>
-        <button class="btn btn-ghost" id="btnExportSensors">Exportar CSV (sensores)</button>
+        <button class="btn btn-ghost" id="btnExportSensors">Exportar CSV (dispositivo)</button>
         <button class="btn btn-ghost" id="btnExportEvents">Exportar CSV (eventos)</button>
       </div>
     </aside>
@@ -62,41 +67,43 @@
       <header class="topbar">
         <div class="left">
           <h1>Painel de Manutenção</h1>
-          <p id="subtitle">Status, alertas e leituras por sensor</p>
+          <p id="subtitle">Visão geral de consumo diário e alertas por dispositivo</p>
         </div>
 
         <div class="right">
           <div class="status" id="statusTag">
             <span class="dot"></span>
-            <span>Atualizado agora</span>
+            <span>Aguardando carga</span>
           </div>
           <a class="btn btn-ghost" href="index.html">Sair</a>
         </div>
       </header>
 
+      <div id="feedbackBox" class="feedback" style="display:none;"></div>
+
       <section class="kpis">
         <div class="kpi">
-          <div class="kpi-label">Sensores online</div>
+          <div class="kpi-label">Dispositivos online</div>
           <div class="kpi-value" id="kpiOnline">—</div>
-          <div class="kpi-sub">Operando normalmente</div>
+          <div class="kpi-sub">Dispositivo com dados disponíveis</div>
         </div>
 
         <div class="kpi">
-          <div class="kpi-label">Sensores offline</div>
+          <div class="kpi-label">Dispositivos sem dados</div>
           <div class="kpi-value danger" id="kpiOffline">—</div>
-          <div class="kpi-sub">Sem comunicação</div>
+          <div class="kpi-sub">Sem consumo disponível</div>
         </div>
 
         <div class="kpi">
-          <div class="kpi-label">Atraso de leitura</div>
+          <div class="kpi-label">Sem canal vinculado</div>
           <div class="kpi-value warn" id="kpiAtraso">—</div>
-          <div class="kpi-sub">Leitura acima do intervalo</div>
+          <div class="kpi-sub">API não conseguiu relacionar o dispositivo</div>
         </div>
 
         <div class="kpi">
           <div class="kpi-label">Alertas ativos</div>
           <div class="kpi-value" id="kpiAlerts">—</div>
-          <div class="kpi-sub">Picos, anomalias, fora de horário</div>
+          <div class="kpi-sub">Alertas não resolvidos</div>
         </div>
       </section>
 
@@ -104,23 +111,18 @@
         <article class="card card-wide">
           <div class="card-head">
             <div>
-              <h2>Potência em tempo quase real (W)</h2>
-              <p>Leitura real por sensor selecionado.</p>
+              <h2>Consumo diário do dispositivo</h2>
+              <p>Histórico diário em kWh do dispositivo selecionado.</p>
             </div>
 
             <div class="mini-actions">
               <label class="chip">
                 Mostrar
                 <select id="intervalo">
-                  <option value="30">Últimos 30 min</option>
-                  <option value="60">Últimos 60 min</option>
-                  <option value="120">Últimos 120 min</option>
+                  <option value="7">Últimos 7 dias</option>
+                  <option value="15">Últimos 15 dias</option>
+                  <option value="30" selected>Últimos 30 dias</option>
                 </select>
-              </label>
-
-              <label class="chip">
-                Limite pico (W)
-                <input id="limitePico" type="number" min="0" step="50" value="3500">
               </label>
             </div>
           </div>
@@ -130,15 +132,15 @@
           </div>
 
           <div class="hint">
-            Dica: selecione um sensor na barra lateral para atualizar o gráfico e os detalhes.
+            Selecione um dispositivo para visualizar o consumo diário.
           </div>
         </article>
 
         <article class="card">
           <div class="card-head">
             <div>
-              <h2>Sensores</h2>
-              <p>Online/Offline e última leitura.</p>
+              <h2>Dispositivo selecionado</h2>
+              <p>Resumo do consumo e da disponibilidade dos dados.</p>
             </div>
           </div>
 
@@ -146,10 +148,10 @@
             <table class="table" id="tableSensors">
               <thead>
                 <tr>
-                  <th>Sensor</th>
+                  <th>Dispositivo</th>
                   <th>Status</th>
-                  <th>Última leitura</th>
-                  <th>W (agora)</th>
+                  <th>Último dia</th>
+                  <th>kWh</th>
                 </tr>
               </thead>
               <tbody></tbody>
@@ -161,7 +163,7 @@
           <div class="card-head">
             <div>
               <h2>Alertas técnicos</h2>
-              <p>Priorize correções e inspeções.</p>
+              <p>Alertas ativos vinculados ao dispositivo.</p>
             </div>
           </div>
 
@@ -171,19 +173,18 @@
         <article class="card card-wide">
           <div class="card-head">
             <div>
-              <h2>Log de eventos</h2>
-              <p>Registro de ocorrências do sistema.</p>
+              <h2>Histórico de alertas</h2>
+              <p>Eventos registrados para o dispositivo selecionado.</p>
             </div>
 
             <div class="mini-actions">
               <label class="chip">
-                Mostrar
+                Tipo
                 <select id="eventFilter">
-                  <option value="all" selected>Todos</option>
-                  <option value="OFFLINE">Offline</option>
-                  <option value="PEAK">Pico</option>
-                  <option value="ANOMALY">Anomalia</option>
-                  <option value="OUT_OF_HOURS">Fora do horário</option>
+                  <option value="">Todos</option>
+                  <option value="sobrecorrente">Sobrecorrente</option>
+                  <option value="consumo_fora_horario">Consumo fora do horário</option>
+                  <option value="queda_brusca">Queda brusca</option>
                 </select>
               </label>
             </div>
@@ -196,7 +197,7 @@
                   <th>Data/hora</th>
                   <th>Tipo</th>
                   <th>Severidade</th>
-                  <th>Sensor</th>
+                  <th>Dispositivo</th>
                   <th>Descrição</th>
                 </tr>
               </thead>
