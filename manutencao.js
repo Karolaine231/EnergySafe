@@ -1,5 +1,11 @@
 const API_BASE = "https://backendsafe.onrender.com";
 
+const TIPO_LABEL = {
+  "queda_brusca": "Queda brusca",
+  "consumo_fora_horario": "Consumo fora do horário",
+  "sobrecorrente": "Sobrecorrente"
+};
+
 function $(id) {
   return document.getElementById(id);
 }
