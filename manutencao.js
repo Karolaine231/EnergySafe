@@ -1,26 +1,5 @@
-/* ============================================================
-   Safe Energy • Manutenção — FastAPI / PostgreSQL
-   Integração com https://backendsafe.onrender.com
-   Backend atual:
-   /locais
-   /quadros?local_id=
-   /dispositivos?quadro_id=
-   /canais?quadro_id=&dispositivo_id=
-   /medicoes?canal_id=&inicio=&fim=&valido=
-   /alertas?canal_id=&nivel=&tipo=&resolvido=
-   ============================================================ */
-
 const API_BASE = "https://backendsafe.onrender.com";
 
-/* ------------------------------------------------------------
-   Configuração de status
------------------------------------------------------------- */
-const STATUS_OK_MIN = 5;       // até 5 min sem leitura => ONLINE
-const STATUS_ATRASO_MIN = 15;  // até 15 min => ATRASO, acima => OFFLINE
-
-/* ------------------------------------------------------------
-   Helpers
------------------------------------------------------------- */
 function $(id) {
   return document.getElementById(id);
 }
@@ -44,32 +23,54 @@ function asArray(payload) {
 
 function buildUrl(path, params = {}) {
   const url = new URL(API_BASE + path);
-
   Object.entries(params).forEach(([key, value]) => {
     if (value !== undefined && value !== null && value !== "") {
       url.searchParams.set(key, value);
     }
   });
-
   return url.toString();
 }
 
-async function getJSON(path, params = {}) {
-  const response = await fetch(buildUrl(path, params), {
-    headers: { "Accept": "application/json" }
-  });
+async function getJSON(path, params = {}, retries = 2) {
+  const url = buildUrl(path, params);
 
-  if (!response.ok) {
-    throw new Error(`Erro HTTP ${response.status} em ${path}`);
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 45000);
+
+    try {
+      const response = await fetch(url, {
+        method: "GET",
+        headers: { Accept: "application/json" },
+        signal: controller.signal
+      });
+
+      clearTimeout(timeout);
+
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`HTTP ${response.status} em ${path}: ${text}`);
+      }
+
+      return await response.json();
+    } catch (error) {
+      clearTimeout(timeout);
+      if (attempt === retries) throw error;
+      await new Promise(r => setTimeout(r, 1500 * (attempt + 1)));
+    }
   }
+}
 
-  return await response.json();
+function normalizeTimestamp(dt) {
+  if (!dt) return null;
+  if (typeof dt !== "string") return dt;
+  if (dt.includes(" ") && !dt.includes("T")) return dt.replace(" ", "T");
+  return dt;
 }
 
 function formatDt(dt) {
   if (!dt) return "-";
-
-  const d = new Date(dt);
+  const d = new Date(normalizeTimestamp(dt));
   if (Number.isNaN(d.getTime())) return "-";
 
   return d.toLocaleString("pt-BR", {
@@ -81,29 +82,11 @@ function formatDt(dt) {
   });
 }
 
-function formatHour(dt) {
+function formatDateBR(dt) {
   if (!dt) return "-";
-
-  const d = new Date(dt);
-  if (Number.isNaN(d.getTime())) return "-";
-
-  return d.toLocaleTimeString("pt-BR", {
-    hour: "2-digit",
-    minute: "2-digit"
-  });
-}
-
-function minutesAgo(dt) {
-  if (!dt) return Infinity;
-
-  const d = new Date(dt);
-  if (Number.isNaN(d.getTime())) return Infinity;
-
-  return (Date.now() - d.getTime()) / 60000;
-}
-
-function isoMinutesAgo(min) {
-  return new Date(Date.now() - min * 60000).toISOString();
+  const d = new Date(`${dt}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return dt;
+  return d.toLocaleDateString("pt-BR");
 }
 
 function exportCsv(filename, rows) {
@@ -143,7 +126,6 @@ function setStatusText(msg, tipo = "ok") {
 function showFeedback(msg, tipo = "info") {
   const box = $("feedbackBox");
   if (!box) return;
-
   box.style.display = "block";
   box.textContent = msg;
   box.className = "feedback " + tipo;
@@ -152,7 +134,6 @@ function showFeedback(msg, tipo = "info") {
 function hideFeedback() {
   const box = $("feedbackBox");
   if (!box) return;
-
   box.style.display = "none";
   box.textContent = "";
   box.className = "feedback";
@@ -160,12 +141,19 @@ function hideFeedback() {
 
 function setButtonLoading(btn, loading, textLoading = "Carregando...") {
   if (!btn) return;
-  if (!btn.dataset.originalText) {
-    btn.dataset.originalText = btn.textContent;
-  }
-
+  if (!btn.dataset.originalText) btn.dataset.originalText = btn.textContent;
   btn.disabled = loading;
   btn.textContent = loading ? textLoading : btn.dataset.originalText;
+}
+
+function todayISO() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function daysAgoISO(days) {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  return d.toISOString().slice(0, 10);
 }
 
 /* ------------------------------------------------------------
@@ -176,10 +164,8 @@ let chartW = null;
 let locaisCache = [];
 let quadrosCache = [];
 let dispositivosCache = [];
-let canaisCache = [];
-let medicoesRecentesCache = [];
+let consumoCache = [];
 let alertasCache = [];
-let sensoresCache = [];
 let eventosCache = [];
 
 /* ------------------------------------------------------------
@@ -196,8 +182,7 @@ function adaptQuadro(item) {
   return {
     id: pick(item, "id", "quadro_id"),
     nome: pick(item, "nome", "name", "descricao") || `Quadro ${pick(item, "id", "quadro_id")}`,
-    local_id: pick(item, "local_id", "localId"),
-    quadro_pai_id: pick(item, "quadro_pai_id", "quadroPaiId")
+    local_id: pick(item, "local_id", "localId")
   };
 }
 
@@ -210,27 +195,13 @@ function adaptDispositivo(item) {
   };
 }
 
-function adaptCanal(item) {
+function adaptConsumo(item) {
   return {
-    id: pick(item, "id", "canal_id"),
-    dispositivo_id: pick(item, "dispositivo_id", "dispositivoId"),
-    fase: pick(item, "fase"),
-    tipo: pick(item, "tipo"),
-    nome:
-      pick(item, "nome", "descricao", "label") ||
-      `Canal ${pick(item, "id", "canal_id")} • ${pick(item, "fase") || "-"} • ${pick(item, "tipo") || "-"}`,
-  };
-}
-
-function adaptMedicao(item) {
-  return {
-    id: pick(item, "id", "medicao_id"),
+    id: pick(item, "id"),
     canal_id: pick(item, "canal_id", "canalId"),
-    corrente: Number(pick(item, "corrente", "current") || 0),
-    tensao: Number(pick(item, "tensao", "voltage") || 0),
-    potencia: Number(pick(item, "potencia", "potencia_total", "power") || 0),
-    valido: Boolean(pick(item, "valido", "valid")),
-    timestamp: pick(item, "timestamp", "created_at", "data")
+    data: pick(item, "data", "date"),
+    kwh: Number(pick(item, "kwh", "consumo_kwh") || 0),
+    criado_em: normalizeTimestamp(pick(item, "criado_em", "created_at"))
   };
 }
 
@@ -240,322 +211,180 @@ function adaptAlerta(item) {
     canal_id: pick(item, "canal_id", "canalId"),
     tipo: pick(item, "tipo", "type") || "alerta",
     nivel: pick(item, "nivel", "severity", "status") || "aviso",
+    mensagem: pick(item, "mensagem", "message", "descricao") || "",
     valor: Number(pick(item, "valor") || 0),
     limite: Number(pick(item, "limite") || 0),
     resolvido: Boolean(pick(item, "resolvido") || false),
-    timestamp: pick(item, "timestamp", "created_at", "data")
+    timestamp: normalizeTimestamp(pick(item, "timestamp", "created_at", "data", "criado_em"))
   };
 }
 
 /* ------------------------------------------------------------
-   Normalização de dados derivados
------------------------------------------------------------- */
-function buildCanalLabel(canal) {
-  const disp = dispositivosCache.find(d => String(d.id) === String(canal.dispositivo_id));
-  const nomeDisp = disp?.nome || `Dispositivo ${canal.dispositivo_id || "-"}`;
-  const fase = canal.fase ? ` • Fase ${canal.fase}` : "";
-  const tipo = canal.tipo ? ` • ${canal.tipo}` : "";
-  return `${nomeDisp}${fase}${tipo}`;
-}
-
-function getLatestMedicaoByCanal(canalId) {
-  const lista = medicoesRecentesCache
-    .filter(m => String(m.canal_id) === String(canalId))
-    .sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
-
-  return lista[0] || null;
-}
-
-function getStatusFromTimestamp(timestamp) {
-  const diff = minutesAgo(timestamp);
-
-  if (diff <= STATUS_OK_MIN) {
-    return { code: "ONLINE", label: "OK", className: "" };
-  }
-
-  if (diff <= STATUS_ATRASO_MIN) {
-    return { code: "ATRASO", label: "ATRASO", className: "warn" };
-  }
-
-  return { code: "OFFLINE", label: "OFFLINE", className: "danger" };
-}
-
-function enrichSensoresFromCanais() {
-  return canaisCache.map(canal => {
-    const ultima = getLatestMedicaoByCanal(canal.id);
-    const status = getStatusFromTimestamp(ultima?.timestamp);
-
-    return {
-      canal_id: canal.id,
-      sensor: buildCanalLabel(canal),
-      status_code: status.code,
-      status_label: status.label,
-      status_class: status.className,
-      ultima_leitura: ultima?.timestamp || null,
-      potencia_atual: Number(ultima?.potencia || 0),
-      corrente_atual: Number(ultima?.corrente || 0),
-      tensao_atual: Number(ultima?.tensao || 0),
-      valido: ultima?.valido ?? false
-    };
-  });
-}
-
-/* ------------------------------------------------------------
-   Carga de selects
+   Filtros
 ------------------------------------------------------------ */
 async function carregarLocais() {
   const select = $("local");
+  if (!select) return;
+
   select.innerHTML = `<option value="">Carregando...</option>`;
+  locaisCache = asArray(await getJSON("/locais")).map(adaptLocal);
 
-  const locais = asArray(await getJSON("/locais")).map(adaptLocal);
-  locaisCache = locais;
-
-  select.innerHTML = "";
-
-  if (!locais.length) {
-    select.innerHTML = `<option value="">Nenhum local encontrado</option>`;
-    $("quadro").innerHTML = `<option value="">Sem quadros</option>`;
-    $("sensor").innerHTML = `<option value="">Sem canais</option>`;
-    return;
-  }
-
-  locais.forEach(local => {
+  select.innerHTML = `<option value="">Todos os locais</option>`;
+  locaisCache.forEach(local => {
     const option = document.createElement("option");
     option.value = local.id;
     option.textContent = local.nome;
     select.appendChild(option);
   });
 
-  await carregarQuadros(select.value);
+  await carregarQuadros("");
 }
 
-async function carregarQuadros(localId) {
+async function carregarQuadros(localId = "") {
   const select = $("quadro");
+  if (!select) return;
+
   select.innerHTML = `<option value="">Carregando...</option>`;
 
   if (!localId) {
     quadrosCache = [];
-    dispositivosCache = [];
-    canaisCache = [];
-    select.innerHTML = `<option value="">Selecione um local</option>`;
-    $("sensor").innerHTML = `<option value="">Selecione um quadro</option>`;
+    select.innerHTML = `<option value="">Todos os quadros</option>`;
     return;
   }
 
-  const quadros = asArray(await getJSON("/quadros", { local_id: localId })).map(adaptQuadro);
-  quadrosCache = quadros;
+  quadrosCache = asArray(await getJSON("/quadros", { local_id: localId })).map(adaptQuadro);
 
-  select.innerHTML = "";
-
-  if (!quadros.length) {
-    dispositivosCache = [];
-    canaisCache = [];
-    select.innerHTML = `<option value="">Nenhum quadro encontrado</option>`;
-    $("sensor").innerHTML = `<option value="">Sem canais</option>`;
-    return;
-  }
-
-  quadros.forEach(quadro => {
+  select.innerHTML = `<option value="">Todos os quadros</option>`;
+  quadrosCache.forEach(quadro => {
     const option = document.createElement("option");
     option.value = quadro.id;
     option.textContent = quadro.nome;
     select.appendChild(option);
   });
-
-  await carregarDispositivosECanais(select.value);
 }
 
-async function carregarDispositivosECanais(quadroId) {
-  const sensorSelect = $("sensor");
-  sensorSelect.innerHTML = `<option value="">Carregando...</option>`;
+async function carregarDispositivos(quadroId = "") {
+  const select = $("dispositivo");
+  if (!select) return;
+
+  select.innerHTML = `<option value="">Carregando...</option>`;
 
   if (!quadroId) {
     dispositivosCache = [];
-    canaisCache = [];
-    sensorSelect.innerHTML = `<option value="">Selecione um quadro</option>`;
+    select.innerHTML = `<option value="">Todos os dispositivos</option>`;
     return;
   }
 
-  const [dispositivosRaw, canaisRaw] = await Promise.all([
-    getJSON("/dispositivos", { quadro_id: quadroId }),
-    getJSON("/canais", { quadro_id: quadroId })
-  ]);
+  dispositivosCache = asArray(await getJSON("/dispositivos", { quadro_id: quadroId })).map(adaptDispositivo);
 
-  dispositivosCache = asArray(dispositivosRaw).map(adaptDispositivo);
-  canaisCache = asArray(canaisRaw).map(adaptCanal);
-
-  sensorSelect.innerHTML = "";
-
-  if (!canaisCache.length) {
-    sensorSelect.innerHTML = `<option value="">Nenhum canal encontrado</option>`;
-    return;
-  }
-
-  canaisCache.forEach(canal => {
+  select.innerHTML = `<option value="">Todos os dispositivos</option>`;
+  dispositivosCache.forEach(dispositivo => {
     const option = document.createElement("option");
-    option.value = canal.id;
-    option.textContent = buildCanalLabel(canal);
-    sensorSelect.appendChild(option);
+    option.value = dispositivo.id;
+    option.textContent = dispositivo.nome + (dispositivo.ativo ? "" : " (inativo)");
+    select.appendChild(option);
   });
 }
 
 /* ------------------------------------------------------------
-   Busca de medições e alertas
+   Consumo e alertas
 ------------------------------------------------------------ */
-async function carregarMedicoesRecentes() {
-  medicoesRecentesCache = [];
+async function carregarConsumo() {
+  const dias = Number($("intervalo")?.value || 30);
+  const dataIni = daysAgoISO(dias);
+  const dataFim = todayISO();
 
-  if (!canaisCache.length) {
-    return [];
-  }
+  consumoCache = asArray(await getJSON("/consumo", {
+    data_ini: dataIni,
+    data_fim: dataFim,
+    skip: 0,
+    limit: 500
+  })).map(adaptConsumo);
 
-  // Busca uma janela recente para inferir status dos canais
-  const inicio = isoMinutesAgo(24 * 60); // últimas 24h
-
-  const promises = canaisCache.map(async canal => {
-    try {
-      const lista = asArray(await getJSON("/medicoes", {
-        canal_id: canal.id,
-        inicio,
-        valido: true
-      })).map(adaptMedicao);
-
-      return lista;
-    } catch (error) {
-      console.warn("Falha ao carregar medições do canal", canal.id, error);
-      return [];
-    }
-  });
-
-  const result = await Promise.all(promises);
-  medicoesRecentesCache = result.flat();
-  return medicoesRecentesCache;
+  return consumoCache;
 }
 
-async function carregarAlertasPorEscopo() {
-  alertasCache = [];
+async function carregarAlertasAPI() {
+  alertasCache = asArray(await getJSON("/alertas", {
+    skip: 0,
+    limit: 100
+  }))
+    .map(adaptAlerta)
+    .sort((a, b) => new Date(normalizeTimestamp(b.timestamp)) - new Date(normalizeTimestamp(a.timestamp)));
 
-  if (!canaisCache.length) {
-    return [];
-  }
-
-  const promises = canaisCache.map(async canal => {
-    try {
-      const lista = asArray(await getJSON("/alertas", {
-        canal_id: canal.id,
-        resolvido: false
-      })).map(adaptAlerta);
-
-      return lista;
-    } catch (error) {
-      console.warn("Falha ao carregar alertas do canal", canal.id, error);
-      return [];
-    }
-  });
-
-  const result = await Promise.all(promises);
-  alertasCache = result.flat().sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
   return alertasCache;
 }
 
-async function carregarHistoricoAlertasPorEscopo() {
-  if (!canaisCache.length) {
-    return [];
-  }
+function getConsumoAgrupadoPorData() {
+  const bucket = new Map();
 
-  const tipo = $("eventFilter")?.value || "";
-
-  const promises = canaisCache.map(async canal => {
-    try {
-      const lista = asArray(await getJSON("/alertas", {
-        canal_id: canal.id,
-        tipo: tipo || undefined
-      })).map(adaptAlerta);
-
-      return lista;
-    } catch (error) {
-      console.warn("Falha ao carregar histórico de alertas do canal", canal.id, error);
-      return [];
-    }
+  consumoCache.forEach(item => {
+    const atual = bucket.get(item.data) || 0;
+    bucket.set(item.data, atual + Number(item.kwh || 0));
   });
 
-  const result = await Promise.all(promises);
-  return result.flat().sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+  return Array.from(bucket.entries())
+    .map(([data, kwh]) => ({ data, kwh }))
+    .sort((a, b) => a.data.localeCompare(b.data));
 }
 
 /* ------------------------------------------------------------
-   KPIs
+   KPIs e tabela
 ------------------------------------------------------------ */
-async function carregarKPIs() {
-  sensoresCache = enrichSensoresFromCanais();
+function carregarKPIsETabela() {
+  const dispositivoId = $("dispositivo")?.value || "";
+  const dispositivo = dispositivosCache.find(d => String(d.id) === String(dispositivoId));
+  const agrupado = getConsumoAgrupadoPorData();
+  const ultimo = agrupado[agrupado.length - 1] || null;
+  const alertasAtivos = alertasCache.filter(a => !a.resolvido).length;
 
-  const online = sensoresCache.filter(s => s.status_code === "ONLINE").length;
-  const atraso = sensoresCache.filter(s => s.status_code === "ATRASO").length;
-  const offline = sensoresCache.filter(s => s.status_code === "OFFLINE").length;
-  const alertasAtivos = alertasCache.length;
+  $("kpiOnline").textContent = dispositivo && ultimo ? "1" : "0";
+  $("kpiOffline").textContent = dispositivo && !ultimo ? "1" : "0";
+  $("kpiAtraso").textContent = dispositivo ? "1" : "0";
+  $("kpiAlerts").textContent = String(alertasAtivos);
 
-  $("kpiOnline").textContent = online;
-  $("kpiOffline").textContent = offline;
-  $("kpiAtraso").textContent = atraso;
-  $("kpiAlerts").textContent = alertasAtivos;
-}
-
-/* ------------------------------------------------------------
-   Tabela de sensores
------------------------------------------------------------- */
-async function carregarTabelaSensores() {
   const tbody = $("tableSensors")?.querySelector("tbody");
   if (!tbody) return;
 
   tbody.innerHTML = "";
 
-  if (!sensoresCache.length) {
-    tbody.innerHTML = `
-      <tr>
-        <td colspan="4">Nenhum canal encontrado para este quadro.</td>
-      </tr>
-    `;
+  if (!dispositivo) {
+    tbody.innerHTML = `<tr><td colspan="4">Selecione um dispositivo.</td></tr>`;
     return;
   }
 
-  sensoresCache.forEach(sensor => {
-    const tr = document.createElement("tr");
-
-    tr.innerHTML = `
-      <td>${sensor.sensor}</td>
-      <td><span class="tag ${sensor.status_class}">${sensor.status_label}</span></td>
-      <td>${formatDt(sensor.ultima_leitura)}</td>
-      <td>${Number(sensor.potencia_atual || 0).toFixed(1)} W</td>
-    `;
-
-    tbody.appendChild(tr);
-  });
+  tbody.innerHTML = `
+    <tr>
+      <td>${dispositivo.nome}</td>
+      <td><span class="tag warn">VISÃO GERAL</span></td>
+      <td>${ultimo ? formatDateBR(ultimo.data) : "-"}</td>
+      <td>${ultimo ? Number(ultimo.kwh).toFixed(2) : "0.00"} kWh</td>
+    </tr>
+  `;
 }
 
 /* ------------------------------------------------------------
-   Alertas ativos
+   Alertas e eventos
 ------------------------------------------------------------ */
-async function carregarAlertas() {
+function carregarAlertasUI() {
   const ul = $("alertsList");
   if (!ul) return;
 
   ul.innerHTML = "";
 
-  if (!alertasCache.length) {
+  const ativos = alertasCache.filter(a => !a.resolvido);
+
+  if (!ativos.length) {
     ul.innerHTML = `<li class="alert"><p>Nenhum alerta encontrado.</p></li>`;
     return;
   }
 
-  alertasCache.slice(0, 12).forEach(alerta => {
+  ativos.slice(0, 12).forEach(alerta => {
     const li = document.createElement("li");
     li.className = "alert";
 
-    const canal = canaisCache.find(c => String(c.id) === String(alerta.canal_id));
-    const sensorNome = canal ? buildCanalLabel(canal) : `Canal ${alerta.canal_id}`;
-
     let nivelClass = "";
     const nivel = String(alerta.nivel || "").toLowerCase();
-
     if (nivel.includes("crit")) nivelClass = "danger";
     else if (nivel.includes("avis")) nivelClass = "warn";
 
@@ -564,60 +393,58 @@ async function carregarAlertas() {
         <span>${alerta.tipo}</span>
         <span class="tag ${nivelClass}">${alerta.nivel}</span>
       </div>
-      <p><strong>${sensorNome}</strong> • Valor: ${alerta.valor || 0} • Limite: ${alerta.limite || 0}</p>
+      <p>${alerta.mensagem || "Sem descrição"}</p>
+      <p>Valor: ${alerta.valor} • Limite: ${alerta.limite} • ${formatDt(alerta.timestamp)}</p>
     `;
 
     ul.appendChild(li);
   });
 }
 
-/* ------------------------------------------------------------
-   Tabela de eventos
-   Observação: o backend atual não tem /eventos.
-   Aqui o "log de eventos" é montado a partir do histórico de alertas.
------------------------------------------------------------- */
-async function carregarEventos() {
+function carregarEventos() {
   const tbody = $("tableEvents")?.querySelector("tbody");
   if (!tbody) return;
 
-  const historico = await carregarHistoricoAlertasPorEscopo();
-  eventosCache = historico;
+  const filtroTipo = $("eventFilter")?.value || "";
+  let historico = [...alertasCache];
 
+  if (filtroTipo) {
+    historico = historico.filter(a => String(a.tipo) === String(filtroTipo));
+  }
+
+  eventosCache = historico;
   tbody.innerHTML = "";
 
   if (!historico.length) {
-    tbody.innerHTML = `
-      <tr>
-        <td colspan="5">Nenhum evento encontrado.</td>
-      </tr>
-    `;
+    tbody.innerHTML = `<tr><td colspan="5">Nenhum evento encontrado.</td></tr>`;
     return;
   }
 
-  historico.slice(0, 50).forEach(evento => {
-    const canal = canaisCache.find(c => String(c.id) === String(evento.canal_id));
-    const sensorNome = canal ? buildCanalLabel(canal) : `Canal ${evento.canal_id}`;
+  const nomeDispositivo = $("dispositivo")?.selectedOptions?.[0]?.textContent || "-";
 
+  historico.slice(0, 50).forEach(evento => {
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${formatDt(evento.timestamp)}</td>
       <td>${evento.tipo}</td>
       <td>${evento.nivel}</td>
-      <td>${sensorNome}</td>
-      <td>Valor ${evento.valor || 0} / Limite ${evento.limite || 0}</td>
+      <td>${nomeDispositivo}</td>
+      <td>${evento.mensagem || `Valor ${evento.valor || 0} / Limite ${evento.limite || 0}`}</td>
     `;
     tbody.appendChild(tr);
   });
 }
 
 /* ------------------------------------------------------------
-   Gráfico de potência
+   Gráfico
 ------------------------------------------------------------ */
-async function carregarGrafico() {
-  const canalId = $("sensor")?.value;
-  const intervaloMin = Number($("intervalo")?.value || 30);
+function carregarGrafico() {
+  const ctx = $("chartW");
+  if (!ctx) return;
 
-  if (!canalId) {
+  const agrupado = getConsumoAgrupadoPorData();
+
+  if (!agrupado.length) {
     if (chartW) {
       chartW.destroy();
       chartW = null;
@@ -625,36 +452,19 @@ async function carregarGrafico() {
     return;
   }
 
-  const inicio = isoMinutesAgo(intervaloMin);
+  const labels = agrupado.map(item => formatDateBR(item.data));
+  const valores = agrupado.map(item => Number(item.kwh || 0));
 
-  const medicoes = asArray(await getJSON("/medicoes", {
-    canal_id: canalId,
-    inicio,
-    valido: true
-  })).map(adaptMedicao);
-
-  const ordenadas = medicoes.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-
-  const labels = ordenadas.map(item => formatHour(item.timestamp));
-  const valores = ordenadas.map(item => Number(item.potencia || 0));
-  const ctx = $("chartW");
-
-  if (chartW) {
-    chartW.destroy();
-  }
+  if (chartW) chartW.destroy();
 
   chartW = new Chart(ctx, {
-    type: "line",
+    type: "bar",
     data: {
       labels,
       datasets: [{
-        label: "Potência (W)",
+        label: "Consumo diário (kWh)",
         data: valores,
-        tension: 0.25,
-        pointRadius: 2,
-        pointHoverRadius: 4,
-        borderWidth: 2,
-        fill: true
+        borderWidth: 1
       }]
     },
     options: {
@@ -669,6 +479,7 @@ async function carregarGrafico() {
           grid: { color: "rgba(255,255,255,0.06)" }
         },
         y: {
+          beginAtZero: true,
           ticks: { color: "rgba(234,240,255,0.65)" },
           grid: { color: "rgba(255,255,255,0.06)" }
         }
@@ -678,22 +489,16 @@ async function carregarGrafico() {
 }
 
 /* ------------------------------------------------------------
-   Subtítulo
+   UI
 ------------------------------------------------------------ */
 function atualizarSubtitulo() {
-  const localText = $("local")?.selectedOptions[0]?.textContent || "-";
-  const quadroText = $("quadro")?.selectedOptions[0]?.textContent || "-";
-  const sensorText = $("sensor")?.selectedOptions[0]?.textContent || "-";
+  const localText = $("local")?.selectedOptions?.[0]?.textContent || "-";
+  const quadroText = $("quadro")?.selectedOptions?.[0]?.textContent || "-";
+  const dispositivoText = $("dispositivo")?.selectedOptions?.[0]?.textContent || "-";
 
-  const subtitle = $("subtitle");
-  if (subtitle) {
-    subtitle.textContent = `Filtro: ${localText} • ${quadroText} • ${sensorText}`;
-  }
+  $("subtitle").textContent = `Filtro: ${localText} • ${quadroText} • ${dispositivoText}`;
 }
 
-/* ------------------------------------------------------------
-   Fluxo principal
------------------------------------------------------------- */
 async function carregarPainelCompleto() {
   hideFeedback();
   atualizarSubtitulo();
@@ -701,145 +506,109 @@ async function carregarPainelCompleto() {
   setButtonLoading($("btnAplicar"), true);
 
   try {
-    if (!$("local")?.value || !$("quadro")?.value) {
-      sensoresCache = [];
-      eventosCache = [];
-      medicoesRecentesCache = [];
+    const dispositivoId = $("dispositivo")?.value || "";
+
+    if (!dispositivoId) {
+      consumoCache = [];
       alertasCache = [];
-
-      $("kpiOnline").textContent = "0";
-      $("kpiOffline").textContent = "0";
-      $("kpiAtraso").textContent = "0";
-      $("kpiAlerts").textContent = "0";
-
-      const tbodySensors = $("tableSensors")?.querySelector("tbody");
-      const tbodyEvents = $("tableEvents")?.querySelector("tbody");
-      const alerts = $("alertsList");
-
-      if (tbodySensors) {
-        tbodySensors.innerHTML = `
-          <tr>
-            <td colspan="4">Selecione um local e um quadro.</td>
-          </tr>
-        `;
-      }
-
-      if (tbodyEvents) {
-        tbodyEvents.innerHTML = `
-          <tr>
-            <td colspan="5">Selecione um local e um quadro.</td>
-          </tr>
-        `;
-      }
-
-      if (alerts) {
-        alerts.innerHTML = `<li class="alert"><p>Selecione um local e um quadro.</p></li>`;
-      }
-
-      if (chartW) {
-        chartW.destroy();
-        chartW = null;
-      }
-
-      setStatusText("Aguardando filtros", "warn");
+      eventosCache = [];
+      carregarKPIsETabela();
+      carregarGrafico();
+      carregarEventos();
+      carregarAlertasUI();
+      setStatusText("Selecione um dispositivo", "warn");
       return;
     }
 
-    await carregarMedicoesRecentes();
-    await carregarAlertasPorEscopo();
-    await carregarKPIs();
-    await carregarTabelaSensores();
-    await carregarAlertas();
-    await carregarEventos();
-    await carregarGrafico();
+    showFeedback(
+      "Exibindo visão geral baseada nos endpoints disponíveis da API. O gráfico usa o consumo diário retornado por /consumo.",
+      "info"
+    );
+
+    await Promise.all([carregarConsumo(), carregarAlertasAPI()]);
+    carregarKPIsETabela();
+    carregarGrafico();
+    carregarAlertasUI();
+    carregarEventos();
 
     setStatusText("Atualizado agora", "ok");
   } catch (error) {
-    console.error("carregarPainelCompleto", error);
-    showFeedback("Não foi possível carregar os dados do painel de manutenção.", "error");
+    console.error(error);
+    showFeedback(`Não foi possível carregar os dados do painel: ${error.message}`, "error");
     setStatusText("Erro ao carregar", "error");
   } finally {
     setButtonLoading($("btnAplicar"), false);
   }
 }
 
-/* ------------------------------------------------------------
-   Exportações
------------------------------------------------------------- */
 function configurarExportacoes() {
-  const btnSensores = $("btnExportSensors");
-  const btnEventos = $("btnExportEvents");
+  $("btnExportSensors")?.addEventListener("click", () => {
+    const dispositivo = $("dispositivo")?.selectedOptions?.[0]?.textContent || "-";
+    const agrupado = getConsumoAgrupadoPorData();
 
-  if (btnSensores) {
-    btnSensores.addEventListener("click", () => {
-      const rows = [["Sensor", "Status", "Ultima Leitura", "Potencia Atual (W)", "Corrente (A)", "Tensao (V)"]];
-
-      sensoresCache.forEach(sensor => {
-        rows.push([
-          sensor.sensor,
-          sensor.status_label,
-          formatDt(sensor.ultima_leitura),
-          Number(sensor.potencia_atual || 0).toFixed(1),
-          Number(sensor.corrente_atual || 0).toFixed(2),
-          Number(sensor.tensao_atual || 0).toFixed(2)
-        ]);
-      });
-
-      exportCsv("sensores_manutencao.csv", rows);
+    const rows = [["Dispositivo", "Data", "Consumo (kWh)"]];
+    agrupado.forEach(item => {
+      rows.push([dispositivo, formatDateBR(item.data), Number(item.kwh || 0).toFixed(2)]);
     });
-  }
 
-  if (btnEventos) {
-    btnEventos.addEventListener("click", () => {
-      const rows = [["DataHora", "Tipo", "Severidade", "Canal", "Valor", "Limite", "Resolvido"]];
+    exportCsv("dispositivo_consumo.csv", rows);
+  });
 
-      eventosCache.forEach(evento => {
-        const canal = canaisCache.find(c => String(c.id) === String(evento.canal_id));
-        const sensorNome = canal ? buildCanalLabel(canal) : `Canal ${evento.canal_id}`;
+  $("btnExportEvents")?.addEventListener("click", () => {
+    const dispositivo = $("dispositivo")?.selectedOptions?.[0]?.textContent || "-";
 
-        rows.push([
-          formatDt(evento.timestamp),
-          evento.tipo,
-          evento.nivel,
-          sensorNome,
-          evento.valor,
-          evento.limite,
-          evento.resolvido ? "Sim" : "Nao"
-        ]);
-      });
-
-      exportCsv("eventos_manutencao.csv", rows);
+    const rows = [["DataHora", "Tipo", "Severidade", "Dispositivo", "Descricao"]];
+    eventosCache.forEach(evento => {
+      rows.push([
+        formatDt(evento.timestamp),
+        evento.tipo || "—",
+        evento.nivel || "—",
+        dispositivo,
+        evento.mensagem || "—"
+      ]);
     });
-  }
+
+    exportCsv("eventos_manutencao.csv", rows);
+  });
 }
 
-/* ------------------------------------------------------------
-   Eventos de UI
------------------------------------------------------------- */
 function configurarEventosUI() {
-  $("local")?.addEventListener("change", async (e) => {
-    await carregarQuadros(e.target.value);
-    atualizarSubtitulo();
+  $("local")?.addEventListener("change", async e => {
+    await carregarQuadros(e.target.value || "");
+
+    const quadro = $("quadro");
+    const dispositivo = $("dispositivo");
+
+    if (quadro) quadro.value = "";
+    if (dispositivo) {
+      dispositivo.innerHTML = `<option value="">Todos os dispositivos</option>`;
+      dispositivo.value = "";
+    }
+
     await carregarPainelCompleto();
   });
 
-  $("quadro")?.addEventListener("change", async (e) => {
-    await carregarDispositivosECanais(e.target.value);
-    atualizarSubtitulo();
+  $("quadro")?.addEventListener("change", async e => {
+    await carregarDispositivos(e.target.value || "");
+
+    const dispositivo = $("dispositivo");
+    if (dispositivo) dispositivo.value = "";
+
     await carregarPainelCompleto();
   });
 
-  $("sensor")?.addEventListener("change", async () => {
-    atualizarSubtitulo();
-    await carregarGrafico();
+  $("dispositivo")?.addEventListener("change", async () => {
+    await carregarPainelCompleto();
   });
 
   $("eventFilter")?.addEventListener("change", async () => {
-    await carregarEventos();
+    carregarEventos();
   });
 
   $("intervalo")?.addEventListener("change", async () => {
-    await carregarGrafico();
+    await carregarConsumo();
+    carregarGrafico();
+    carregarKPIsETabela();
   });
 
   $("btnAplicar")?.addEventListener("click", async () => {
@@ -851,9 +620,6 @@ function configurarEventosUI() {
   });
 }
 
-/* ------------------------------------------------------------
-   Boot
------------------------------------------------------------- */
 document.addEventListener("DOMContentLoaded", async () => {
   try {
     setStatusText("Inicializando...", "warn");
@@ -863,7 +629,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     await carregarPainelCompleto();
   } catch (error) {
     console.error(error);
-    alert("Erro ao carregar dados do painel de manutenção.");
+    alert("Erro ao carregar dados do painel.");
     setStatusText("Erro na inicialização", "error");
   }
 });
