@@ -17,6 +17,7 @@ function formatNivel(nivel) {
   return NIVEL_LABEL[nivel] || nivel;
 }
 
+
 function formatTipo(tipo) {
   if (!tipo) return "-";
 
@@ -452,7 +453,7 @@ function carregarAlertasUI() {
     li.innerHTML = `
       <div class="title">
         <span>${formatTipo(alerta.tipo)}</span>
-        <span class="tag ${nivelClass}">${alerta.nivel}</span>
+        <span class="tag ${nivelClass}">${formatNivel(alerta.nivel)}</span>
       </div>
       <p>${alerta.mensagem || "Sem descrição"}</p>
       <p>Valor: ${alerta.valor} • Limite: ${alerta.limite} • ${formatDt(alerta.timestamp)}</p>
