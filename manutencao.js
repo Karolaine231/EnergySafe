@@ -6,6 +6,29 @@ const TIPO_LABEL = {
   "sobrecorrente": "Sobrecorrente"
 };
 
+const NIVEL_LABEL = {
+  "critico": "Crítico",
+  "aviso": "Aviso",
+  "info": "Informativo"
+};
+
+function formatNivel(nivel) {
+  if (!nivel) return "-";
+  return NIVEL_LABEL[nivel] || nivel;
+}
+
+function formatTipo(tipo) {
+  if (!tipo) return "-";
+
+  // Se existir no mapa → usa tradução
+  if (TIPO_LABEL[tipo]) return TIPO_LABEL[tipo];
+
+  // fallback automático (caso venha algo novo)
+  return tipo
+    .replaceAll("_", " ")
+    .replace(/\b\w/g, l => l.toUpperCase());
+}
+
 function $(id) {
   return document.getElementById(id);
 }
@@ -428,7 +451,7 @@ function carregarAlertasUI() {
 
     li.innerHTML = `
       <div class="title">
-        <span>${alerta.tipo}</span>
+        <span>${formatTipo(alerta.tipo)}</span>
         <span class="tag ${nivelClass}">${alerta.nivel}</span>
       </div>
       <p>${alerta.mensagem || "Sem descrição"}</p>
@@ -462,8 +485,8 @@ function carregarEventos() {
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${formatDt(evento.timestamp)}</td>
-      <td>${evento.tipo}</td>
-      <td>${evento.nivel}</td>
+      <td>${formatTipo(evento.tipo)}</td>
+      <td>${formatNivel(evento.nivel)}</td>
       <td>Geral</td>
       <td>${evento.mensagem || `Valor ${evento.valor || 0} / Limite ${evento.limite || 0}`}</td>
     `;
