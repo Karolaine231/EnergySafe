@@ -186,9 +186,15 @@ let eventosCache = [];
    Adaptadores
 ------------------------------------------------------------ */
 function adaptLocal(item) {
+  const nome = pick(item, "nome", "name") || "Local";
+  const descricao = pick(item, "descricao", "description");
+  const andar = item.andar !== undefined && item.andar !== null
+    ? ` • Andar ${item.andar}`
+    : "";
+  const detalhe = descricao ? ` (${descricao})` : "";
   return {
     id: pick(item, "id", "local_id"),
-    nome: pick(item, "nome", "name", "descricao") || "Local"
+    nome: `${nome}${andar}${detalhe}`
   };
 }
 
