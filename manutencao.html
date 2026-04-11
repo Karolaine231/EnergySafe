@@ -58,7 +58,7 @@
       <div class="sb-section">
         <div class="sb-label">Ações</div>
         <button class="btn btn-primary" id="btnRefresh">Atualizar</button>
-        <button class="btn btn-ghost" id="btnExportSensors">Exportar CSV (dispositivo)</button>
+        <button class="btn btn-ghost" id="btnExportSensors">Exportar CSV (dispositivos)</button>
         <button class="btn btn-ghost" id="btnExportEvents">Exportar CSV (eventos)</button>
       </div>
     </aside>
@@ -67,7 +67,7 @@
       <header class="topbar">
         <div class="left">
           <h1>Painel de Manutenção</h1>
-          <p id="subtitle">Visão geral de consumo diário e alertas por dispositivo</p>
+          <p id="subtitle">Visão geral de consumo diário e alertas</p>
         </div>
 
         <div class="right">
@@ -83,27 +83,27 @@
 
       <section class="kpis">
         <div class="kpi">
-          <div class="kpi-label">Dispositivos online</div>
+          <div class="kpi-label">Dispositivos ativos</div>
           <div class="kpi-value" id="kpiOnline">—</div>
-          <div class="kpi-sub">Dispositivo com dados disponíveis</div>
+          <div class="kpi-sub">Cadastro marcado como ativo</div>
         </div>
 
         <div class="kpi">
-          <div class="kpi-label">Dispositivos sem dados</div>
+          <div class="kpi-label">Dispositivos inativos</div>
           <div class="kpi-value danger" id="kpiOffline">—</div>
-          <div class="kpi-sub">Sem consumo disponível</div>
-        </div>
-
-        <div class="kpi">
-          <div class="kpi-label">Sem canal vinculado</div>
-          <div class="kpi-value warn" id="kpiAtraso">—</div>
-          <div class="kpi-sub">API não conseguiu relacionar o dispositivo</div>
+          <div class="kpi-sub">Cadastro marcado como inativo</div>
         </div>
 
         <div class="kpi">
           <div class="kpi-label">Alertas ativos</div>
-          <div class="kpi-value" id="kpiAlerts">—</div>
+          <div class="kpi-value warn" id="kpiAtraso">—</div>
           <div class="kpi-sub">Alertas não resolvidos</div>
+        </div>
+
+        <div class="kpi">
+          <div class="kpi-label">Eventos no histórico</div>
+          <div class="kpi-value" id="kpiAlerts">—</div>
+          <div class="kpi-sub">Total retornado pela API</div>
         </div>
       </section>
 
@@ -111,11 +111,21 @@
         <article class="card card-wide">
           <div class="card-head">
             <div>
-              <h2>Consumo diário do dispositivo</h2>
-              <p>Histórico diário em kWh do dispositivo selecionado.</p>
+              <h2 id="chartTitle">Consumo diário geral</h2>
+              <p id="chartSubtitle">Barras com linha e pontos mostrando a evolução diária do consumo.</p>
             </div>
 
             <div class="mini-actions">
+              <label class="chip">
+                Gráfico
+                <select id="chartMode">
+                  <option value="consumo_geral" selected>Consumo diário geral</option>
+                  <option value="tensao">Consumo de tensão</option>
+                  <option value="corrente">Consumo de corrente</option>
+                  <option value="consumo_dispositivo">Consumo por dispositivo</option>
+                </select>
+              </label>
+
               <label class="chip">
                 Mostrar
                 <select id="intervalo">
@@ -131,16 +141,16 @@
             <canvas id="chartW"></canvas>
           </div>
 
-          <div class="hint">
-            Selecione um dispositivo para visualizar o consumo diário.
+          <div class="hint" id="chartHint">
+            O gráfico aparece automaticamente ao carregar a página.
           </div>
         </article>
 
         <article class="card">
           <div class="card-head">
             <div>
-              <h2>Dispositivo selecionado</h2>
-              <p>Resumo do consumo e da disponibilidade dos dados.</p>
+              <h2>Dispositivos do quadro</h2>
+              <p>Mostra todos por padrão. O filtro de dispositivo refina esta tabela.</p>
             </div>
           </div>
 
@@ -154,7 +164,9 @@
                   <th>kWh</th>
                 </tr>
               </thead>
-              <tbody></tbody>
+              <tbody>
+                <tr><td colspan="4">Selecione um quadro.</td></tr>
+              </tbody>
             </table>
           </div>
         </article>
@@ -163,18 +175,20 @@
           <div class="card-head">
             <div>
               <h2>Alertas técnicos</h2>
-              <p>Alertas ativos vinculados ao dispositivo.</p>
+              <p>Alertas ativos visíveis mesmo sem filtro.</p>
             </div>
           </div>
 
-          <ul class="alerts" id="alertsList"></ul>
+          <ul class="alerts" id="alertsList">
+            <li class="alert"><p>Carregando alertas...</p></li>
+          </ul>
         </article>
 
         <article class="card card-wide">
           <div class="card-head">
             <div>
               <h2>Histórico de alertas</h2>
-              <p>Eventos registrados para o dispositivo selecionado.</p>
+              <p>Eventos registrados pela API. O filtro por tipo continua disponível.</p>
             </div>
 
             <div class="mini-actions">
@@ -199,9 +213,12 @@
                   <th>Severidade</th>
                   <th>Dispositivo</th>
                   <th>Descrição</th>
+                  <th>Status</th>
                 </tr>
               </thead>
-              <tbody></tbody>
+              <tbody>
+                <tr><td colspan="6">Carregando eventos...</td></tr>
+              </tbody>
             </table>
           </div>
         </article>
