@@ -1,34 +1,22 @@
 const API_BASE = "https://backendsafe.onrender.com";
 
 const TIPO_LABEL = {
-  "queda_brusca": "Queda brusca",
-  "consumo_fora_horario": "Consumo fora do horário",
-  "sobrecorrente": "Sobrecorrente"
+  queda_brusca: "Queda brusca",
+  consumo_fora_horario: "Consumo fora do horário",
+  sobrecorrente: "Sobrecorrente"
 };
 
 const NIVEL_LABEL = {
-  "critico": "Crítico",
-  "aviso": "Aviso",
-  "info": "Informativo"
+  critico: "Crítico",
+  aviso: "Aviso",
+  info: "Informativo"
 };
 
-function formatNivel(nivel) {
-  if (!nivel) return "-";
-  return NIVEL_LABEL[nivel] || nivel;
-}
-
-
-function formatTipo(tipo) {
-  if (!tipo) return "-";
-
-  // Se existir no mapa → usa tradução
-  if (TIPO_LABEL[tipo]) return TIPO_LABEL[tipo];
-
-  // fallback automático (caso venha algo novo)
-  return tipo
-    .replaceAll("_", " ")
-    .replace(/\b\w/g, l => l.toUpperCase());
-}
+const NIVEL_CLASS = {
+  critico: "danger",
+  aviso: "warn",
+  info: ""
+};
 
 function $(id) {
   return document.getElementById(id);
@@ -191,14 +179,14 @@ function setButtonLoading(btn, loading, textLoading = "Carregando...") {
   btn.textContent = loading ? textLoading : btn.dataset.originalText;
 }
 
-function todayISO() {
-  return new Date().toISOString().slice(0, 10);
+function formatTipo(tipo) {
+  if (!tipo) return "-";
+  return TIPO_LABEL[tipo] || tipo.replaceAll("_", " ").replace(/\b\w/g, l => l.toUpperCase());
 }
 
-function daysAgoISO(days) {
-  const d = new Date();
-  d.setDate(d.getDate() - days);
-  return d.toISOString().slice(0, 10);
+function formatNivel(nivel) {
+  if (!nivel) return "-";
+  return NIVEL_LABEL[nivel] || nivel;
 }
 
 /* ------------------------------------------------------------
@@ -212,6 +200,7 @@ let dispositivosCache = [];
 let consumoCache = [];
 let alertasCache = [];
 let eventosCache = [];
+let medicoesCache = [];
 
 /* ------------------------------------------------------------
    Adaptadores
@@ -245,8 +234,7 @@ function adaptConsumo(item) {
     id: pick(item, "id"),
     canal_id: pick(item, "canal_id", "canalId"),
     data: pick(item, "data", "date"),
-    kwh: Number(pick(item, "kwh", "consumo_kwh") || 0),
-    criado_em: normalizeTimestamp(pick(item, "criado_em", "created_at"))
+    kwh: Number(pick(item, "kwh", "consumo_kwh") || 0)
   };
 }
 
@@ -264,19 +252,102 @@ function adaptAlerta(item) {
   };
 }
 
+function adaptMedicao(item) {
+  return {
+    id: pick(item, "id"),
+    canal_id: pick(item, "canal_id", "canalId"),
+    corrente: Number(pick(item, "corrente") || 0),
+    tensao: Number(pick(item, "tensao") || 0),
+    potencia: Number(pick(item, "potencia") || 0),
+    valido: pick(item, "valido") !== false,
+    timestamp: normalizeTimestamp(pick(item, "timestamp", "created_at", "criado_em"))
+  };
+}
+
 /* ------------------------------------------------------------
-   Filtros
+   Helpers de período
+------------------------------------------------------------ */
+function filtrarConsumoPorPeriodo() {
+  const diasSelecionados = Number($("intervalo")?.value || 30);
+
+  const ordenados = [...consumoCache]
+    .filter(item => item.data)
+    .sort((a, b) => a.data.localeCompare(b.data));
+
+  if (!ordenados.length) return [];
+
+  const ultimaData = ordenados[ordenados.length - 1].data;
+  const dataFinal = new Date(`${ultimaData}T00:00:00`);
+  const dataInicial = new Date(dataFinal);
+  dataInicial.setDate(dataFinal.getDate() - (diasSelecionados - 1));
+  const dataInicialStr = dataInicial.toISOString().slice(0, 10);
+
+  return ordenados.filter(item => item.data >= dataInicialStr && item.data <= ultimaData);
+}
+
+function getConsumoAgrupadoPorData() {
+  const filtrados = filtrarConsumoPorPeriodo();
+  const bucket = new Map();
+
+  filtrados.forEach(item => {
+    const atual = bucket.get(item.data) || 0;
+    bucket.set(item.data, atual + Number(item.kwh || 0));
+  });
+
+  return Array.from(bucket.entries())
+    .map(([data, kwh]) => ({ data, kwh }))
+    .sort((a, b) => a.data.localeCompare(b.data));
+}
+
+function agruparSeriePorCampo(medicoes, campo) {
+  const diasSelecionados = Number($("intervalo")?.value || 30);
+
+  const lista = medicoes
+    .map(item => ({
+      data: normalizeTimestamp(item.timestamp)?.slice(0, 10),
+      valor: Number(item[campo] || 0)
+    }))
+    .filter(item => item.data)
+    .sort((a, b) => a.data.localeCompare(b.data));
+
+  if (!lista.length) return [];
+
+  const ultimaData = lista[lista.length - 1].data;
+  const dataFinal = new Date(`${ultimaData}T00:00:00`);
+  const dataInicial = new Date(dataFinal);
+  dataInicial.setDate(dataFinal.getDate() - (diasSelecionados - 1));
+  const dataInicialStr = dataInicial.toISOString().slice(0, 10);
+
+  const bucket = new Map();
+
+  lista
+    .filter(item => item.data >= dataInicialStr && item.data <= ultimaData)
+    .forEach(item => {
+      const atual = bucket.get(item.data) || { soma: 0, qtd: 0 };
+      atual.soma += item.valor;
+      atual.qtd += 1;
+      bucket.set(item.data, atual);
+    });
+
+  return Array.from(bucket.entries())
+    .map(([data, obj]) => ({
+      data,
+      valor: obj.qtd ? obj.soma / obj.qtd : 0
+    }))
+    .sort((a, b) => a.data.localeCompare(b.data));
+}
+
+/* ------------------------------------------------------------
+   Carregamento de dados
 ------------------------------------------------------------ */
 async function carregarLocais() {
   const select = $("local");
   if (!select) return;
 
   select.innerHTML = `<option value="">Carregando...</option>`;
-
   locaisCache = asArray(await getJSON("/locais")).map(adaptLocal);
 
   select.innerHTML = `<option value="">Todos os locais</option>`;
-
   locaisCache.forEach(local => {
     const option = document.createElement("option");
     option.value = local.id;
@@ -302,7 +373,6 @@ async function carregarQuadros(localId = "") {
   quadrosCache = asArray(await getJSON("/quadros", { local_id: localId })).map(adaptQuadro);
 
   select.innerHTML = `<option value="">Todos os quadros</option>`;
-
   quadrosCache.forEach(quadro => {
     const option = document.createElement("option");
     option.value = quadro.id;
@@ -326,7 +396,6 @@ async function carregarDispositivos(quadroId = "") {
   dispositivosCache = asArray(await getJSON("/dispositivos", { quadro_id: quadroId })).map(adaptDispositivo);
 
   select.innerHTML = `<option value="">Todos os dispositivos</option>`;
-
   dispositivosCache.forEach(dispositivo => {
     const option = document.createElement("option");
     option.value = dispositivo.id;
@@ -335,17 +404,8 @@ async function carregarDispositivos(quadroId = "") {
   });
 }
 
-/* ------------------------------------------------------------
-   Consumo e alertas
------------------------------------------------------------- */
 async function carregarConsumo() {
-  const dias = Number($("intervalo")?.value || 30);
-  const dataIni = daysAgoISO(dias);
-  const dataFim = todayISO();
-
   consumoCache = asArray(await getJSON("/consumo", {
-    data_ini: dataIni,
-    data_fim: dataFim,
     skip: 0,
     limit: 500
   })).map(adaptConsumo);
@@ -356,7 +416,7 @@ async function carregarConsumo() {
 async function carregarAlertasAPI() {
   alertasCache = asArray(await getJSON("/alertas", {
     skip: 0,
-    limit: 100
+    limit: 500
   }))
     .map(adaptAlerta)
     .sort((a, b) => new Date(normalizeTimestamp(b.timestamp)) - new Date(normalizeTimestamp(a.timestamp)));
@@ -364,17 +424,12 @@ async function carregarAlertasAPI() {
   return alertasCache;
 }
 
-function getConsumoAgrupadoPorData() {
-  const bucket = new Map();
+async function carregarMedicoesGerais() {
+  medicoesCache = asArray(await getJSON("/medicoes", {
+    limit: 500
+  })).map(adaptMedicao);
 
-  consumoCache.forEach(item => {
-    const atual = bucket.get(item.data) || 0;
-    bucket.set(item.data, atual + Number(item.kwh || 0));
-  });
-
-  return Array.from(bucket.entries())
-    .map(([data, kwh]) => ({ data, kwh }))
-    .sort((a, b) => a.data.localeCompare(b.data));
+  return medicoesCache;
 }
 
 /* ------------------------------------------------------------
@@ -391,10 +446,10 @@ function carregarKPIsETabela() {
 
   if ($("kpiOnline")) $("kpiOnline").textContent = String(ativos);
   if ($("kpiOffline")) $("kpiOffline").textContent = String(inativos);
-  if ($("kpiAtraso")) $("kpiAtraso").textContent = "0";
-  if ($("kpiAlerts")) $("kpiAlerts").textContent = String(alertasAtivos);
+  if ($("kpiAtraso")) $("kpiAtraso").textContent = String(alertasAtivos);
+  if ($("kpiAlerts")) $("kpiAlerts").textContent = String(alertasCache.length);
 
-  const tbody = $("tableSensors")?.querySelector("tbody") || $("tableDevices")?.querySelector("tbody");
+  const tbody = $("tableSensors")?.querySelector("tbody");
   if (!tbody) return;
 
   tbody.innerHTML = "";
@@ -405,21 +460,20 @@ function carregarKPIsETabela() {
   }
 
   let lista = [...dispositivosCache];
-
   if (dispositivoId) {
     lista = lista.filter(d => String(d.id) === String(dispositivoId));
   }
 
+  const totalPeriodo = agrupado.reduce((s, i) => s + i.kwh, 0);
+
   lista.forEach(dispositivo => {
     const tr = document.createElement("tr");
-
     tr.innerHTML = `
       <td>${dispositivo.nome}</td>
-      <td><span class="tag ${dispositivo.ativo ? "" : "warn"}">${dispositivo.ativo ? "ATIVO" : "INATIVO"}</span></td>
+      <td><span class="tag ${dispositivo.ativo ? "" : "danger"}">${dispositivo.ativo ? "Ativo" : "Inativo"}</span></td>
       <td>${ultimo ? formatDateBR(ultimo.data) : "-"}</td>
-      <td>${ultimo ? Number(ultimo.kwh).toFixed(2) : "0.00"} kWh</td>
+      <td>${totalPeriodo.toFixed(2)} kWh</td>
     `;
-
     tbody.appendChild(tr);
   });
 }
@@ -427,6 +481,12 @@ function carregarKPIsETabela() {
 /* ------------------------------------------------------------
    Alertas e histórico
 ------------------------------------------------------------ */
+function nomeDispositivoHistorico() {
+  const dispositivoId = $("dispositivo")?.value || "";
+  if (!dispositivoId) return "Geral";
+  return $("dispositivo")?.selectedOptions?.[0]?.textContent || "Dispositivo selecionado";
+}
+
 function carregarAlertasUI() {
   const ul = $("alertsList");
   if (!ul) return;
@@ -444,11 +504,7 @@ function carregarAlertasUI() {
     const li = document.createElement("li");
     li.className = "alert";
 
-    let nivelClass = "";
-    const nivel = String(alerta.nivel || "").toLowerCase();
-
-    if (nivel.includes("crit")) nivelClass = "danger";
-    else if (nivel.includes("avis")) nivelClass = "warn";
+    const nivelClass = NIVEL_CLASS[String(alerta.nivel || "").toLowerCase()] || "";
 
     li.innerHTML = `
       <div class="title">
@@ -478,18 +534,21 @@ function carregarEventos() {
   tbody.innerHTML = "";
 
   if (!historico.length) {
-    tbody.innerHTML = `<tr><td colspan="5">Nenhum evento encontrado.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="6">Nenhum evento encontrado.</td></tr>`;
     return;
   }
+
+  const dispositivoLabel = nomeDispositivoHistorico();
 
   historico.slice(0, 50).forEach(evento => {
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${formatDt(evento.timestamp)}</td>
       <td>${formatTipo(evento.tipo)}</td>
-      <td>${formatNivel(evento.nivel)}</td>
-      <td>Geral</td>
+      <td><span class="tag ${NIVEL_CLASS[evento.nivel] || ""}">${formatNivel(evento.nivel)}</span></td>
+      <td>${dispositivoLabel}</td>
       <td>${evento.mensagem || `Valor ${evento.valor || 0} / Limite ${evento.limite || 0}`}</td>
+      <td><span class="tag ${evento.resolvido ? "" : "warn"}">${evento.resolvido ? "Resolvido" : "Aberto"}</span></td>
     `;
     tbody.appendChild(tr);
   });
@@ -498,54 +557,221 @@ function carregarEventos() {
 /* ------------------------------------------------------------
    Gráfico
 ------------------------------------------------------------ */
-function carregarGrafico() {
+function setChartTexts(title, subtitle, hint) {
+  if ($("chartTitle")) $("chartTitle").textContent = title;
+  if ($("chartSubtitle")) $("chartSubtitle").textContent = subtitle;
+  if ($("chartHint")) $("chartHint").textContent = hint;
+}
+
+function destruirGrafico() {
+  if (chartW) {
+    chartW.destroy();
+    chartW = null;
+  }
+}
+
+function renderGraficoMisto(labels, valores, labelBarra, labelLinha, sufixo = "") {
   const ctx = $("chartW");
   if (!ctx) return;
 
-  const agrupado = getConsumoAgrupadoPorData();
-
-  if (!agrupado.length) {
-    if (chartW) {
-      chartW.destroy();
-      chartW = null;
-    }
-    return;
-  }
-
-  const labels = agrupado.map(item => formatDateBR(item.data));
-  const valores = agrupado.map(item => Number(item.kwh || 0));
-
-  if (chartW) chartW.destroy();
+  destruirGrafico();
 
   chartW = new Chart(ctx, {
-    type: "bar",
     data: {
       labels,
-      datasets: [{
-        label: "Consumo diário (kWh)",
-        data: valores,
-        borderWidth: 1
-      }]
+      datasets: [
+        {
+          type: "bar",
+          label: labelBarra,
+          data: valores,
+          borderWidth: 1,
+          borderRadius: 4,
+          backgroundColor: "rgba(59,130,246,0.35)",
+          borderColor: "rgba(59,130,246,0.9)"
+        },
+        {
+          type: "line",
+          label: labelLinha,
+          data: valores,
+          borderColor: "rgba(56,189,248,1)",
+          backgroundColor: "rgba(56,189,248,1)",
+          borderWidth: 2,
+          pointRadius: 4,
+          pointHoverRadius: 6,
+          pointBackgroundColor: "rgba(56,189,248,1)",
+          pointBorderColor: "#ffffff",
+          pointBorderWidth: 1.5,
+          tension: 0.3,
+          fill: false
+        }
+      ]
     },
     options: {
       responsive: true,
       maintainAspectRatio: false,
       plugins: {
-        legend: { display: false }
+        legend: {
+          display: true,
+          labels: {
+            color: "rgba(234,240,255,.8)",
+            boxWidth: 12
+          }
+        },
+        tooltip: {
+          callbacks: {
+            label: context => ` ${context.dataset.label}: ${Number(context.parsed.y).toFixed(2)}${sufixo}`
+          }
+        }
       },
       scales: {
         x: {
-          ticks: { color: "rgba(234,240,255,0.65)" },
-          grid: { color: "rgba(255,255,255,0.06)" }
+          ticks: {
+            color: "rgba(234,240,255,.65)",
+            maxRotation: 45
+          },
+          grid: {
+            color: "rgba(255,255,255,.06)"
+          }
         },
         y: {
           beginAtZero: true,
-          ticks: { color: "rgba(234,240,255,0.65)" },
-          grid: { color: "rgba(255,255,255,0.06)" }
+          ticks: {
+            color: "rgba(234,240,255,.65)"
+          },
+          grid: {
+            color: "rgba(255,255,255,.06)"
+          }
         }
       }
     }
   });
+}
+
+function renderGraficoConsumoGeral() {
+  setChartTexts(
+    "Consumo diário geral",
+    "Barras com linha e pontos mostrando a evolução diária do consumo.",
+    "O gráfico aparece automaticamente ao carregar a página."
+  );
+
+  const agrupado = getConsumoAgrupadoPorData();
+
+  if (!agrupado.length) {
+    destruirGrafico();
+    return;
+  }
+
+  renderGraficoMisto(
+    agrupado.map(item => formatDateBR(item.data)),
+    agrupado.map(item => Number(item.kwh.toFixed(3))),
+    "Consumo diário (kWh)",
+    "Tendência",
+    " kWh"
+  );
+}
+
+async function renderGraficoTensao() {
+  setChartTexts(
+    "Consumo de tensão",
+    "Média diária das leituras de tensão retornadas pela API.",
+    "Visualização diária em barras com linha e pontos."
+  );
+
+  const medicoes = medicoesCache.length ? medicoesCache : await carregarMedicoesGerais();
+  const serie = agruparSeriePorCampo(medicoes, "tensao");
+
+  if (!serie.length) {
+    destruirGrafico();
+    return;
+  }
+
+  renderGraficoMisto(
+    serie.map(item => formatDateBR(item.data)),
+    serie.map(item => Number(item.valor.toFixed(2))),
+    "Tensão média",
+    "Tendência",
+    " V"
+  );
+}
+
+async function renderGraficoCorrente() {
+  setChartTexts(
+    "Consumo de corrente",
+    "Média diária das leituras de corrente retornadas pela API.",
+    "Visualização diária em barras com linha e pontos."
+  );
+
+  const medicoes = medicoesCache.length ? medicoesCache : await carregarMedicoesGerais();
+  const serie = agruparSeriePorCampo(medicoes, "corrente");
+
+  if (!serie.length) {
+    destruirGrafico();
+    return;
+  }
+
+  renderGraficoMisto(
+    serie.map(item => formatDateBR(item.data)),
+    serie.map(item => Number(item.valor.toFixed(2))),
+    "Corrente média",
+    "Tendência",
+    " A"
+  );
+}
+
+function renderGraficoConsumoPorDispositivo() {
+  const dispositivoId = $("dispositivo")?.value || "";
+
+  setChartTexts(
+    "Consumo por dispositivo",
+    "Esse gráfico depende de um dispositivo selecionado.",
+    "Selecione um dispositivo no filtro para visualizar este modo."
+  );
+
+  if (!dispositivoId) {
+    destruirGrafico();
+    showFeedback("Selecione um dispositivo para visualizar o gráfico de consumo por dispositivo.", "info");
+    return;
+  }
+
+  const agrupado = getConsumoAgrupadoPorData();
+
+  if (!agrupado.length) {
+    destruirGrafico();
+    return;
+  }
+
+  const nome = $("dispositivo")?.selectedOptions?.[0]?.textContent || "Dispositivo";
+
+  renderGraficoMisto(
+    agrupado.map(item => formatDateBR(item.data)),
+    agrupado.map(item => Number(item.kwh.toFixed(3))),
+    `${nome} (kWh)`,
+    "Tendência",
+    " kWh"
+  );
+}
+
+async function carregarGraficoPrincipal() {
+  const modo = $("chartMode")?.value || "consumo_geral";
+
+  if (modo === "consumo_geral") {
+    renderGraficoConsumoGeral();
+    return;
+  }
+
+  if (modo === "tensao") {
+    await renderGraficoTensao();
+    return;
+  }
+
+  if (modo === "corrente") {
+    await renderGraficoCorrente();
+    return;
+  }
+
+  if (modo === "consumo_dispositivo") {
+    renderGraficoConsumoPorDispositivo();
+  }
 }
 
 /* ------------------------------------------------------------
@@ -556,10 +782,7 @@ function atualizarSubtitulo() {
   const quadroText = $("quadro")?.selectedOptions?.[0]?.textContent || "-";
   const dispositivoText = $("dispositivo")?.selectedOptions?.[0]?.textContent || "Todos os dispositivos";
 
-  const subtitle = $("subtitle");
-  if (subtitle) {
-    subtitle.textContent = `Filtro: ${localText} • ${quadroText} • ${dispositivoText}`;
-  }
+  $("subtitle").textContent = `Filtro: ${localText} • ${quadroText} • ${dispositivoText}`;
 }
 
 async function carregarPainelCompleto() {
@@ -567,6 +790,7 @@ async function carregarPainelCompleto() {
   atualizarSubtitulo();
   setStatusText("Carregando...", "warn");
   setButtonLoading($("btnAplicar"), true);
+  setButtonLoading($("btnRefresh"), true);
 
   try {
     const quadroId = $("quadro")?.value || "";
@@ -575,8 +799,9 @@ async function carregarPainelCompleto() {
       consumoCache = [];
       alertasCache = [];
       eventosCache = [];
+      medicoesCache = [];
       carregarKPIsETabela();
-      carregarGrafico();
+      destruirGrafico();
       carregarEventos();
       carregarAlertasUI();
       setStatusText("Selecione um quadro", "warn");
@@ -584,13 +809,15 @@ async function carregarPainelCompleto() {
     }
 
     showFeedback(
-      "Exibindo visão geral do quadro. O filtro de dispositivo refina apenas a tabela.",
+      "Exibindo visão geral do quadro. O filtro de dispositivo refina a tabela e o modo 'Consumo por dispositivo'.",
       "info"
     );
 
     await Promise.all([carregarConsumo(), carregarAlertasAPI()]);
+    medicoesCache = [];
+
     carregarKPIsETabela();
-    carregarGrafico();
+    await carregarGraficoPrincipal();
     carregarAlertasUI();
     carregarEventos();
 
@@ -601,6 +828,7 @@ async function carregarPainelCompleto() {
     setStatusText("Erro ao carregar", "error");
   } finally {
     setButtonLoading($("btnAplicar"), false);
+    setButtonLoading($("btnRefresh"), false);
   }
 }
 
@@ -623,15 +851,16 @@ function configurarExportacoes() {
   });
 
   $("btnExportEvents")?.addEventListener("click", () => {
-    const rows = [["DataHora", "Tipo", "Severidade", "Escopo", "Descricao"]];
+    const rows = [["DataHora", "Tipo", "Severidade", "Dispositivo", "Descricao", "Status"]];
 
     eventosCache.forEach(evento => {
       rows.push([
         formatDt(evento.timestamp),
-        evento.tipo || "—",
-        evento.nivel || "—",
-        "Geral",
-        evento.mensagem || "—"
+        formatTipo(evento.tipo),
+        formatNivel(evento.nivel),
+        nomeDispositivoHistorico(),
+        evento.mensagem || "—",
+        evento.resolvido ? "Resolvido" : "Aberto"
       ]);
     });
 
@@ -666,17 +895,23 @@ function configurarEventosUI() {
 
   $("dispositivo")?.addEventListener("change", async () => {
     carregarKPIsETabela();
+    carregarEventos();
     atualizarSubtitulo();
+    await carregarGraficoPrincipal();
   });
 
-  $("eventFilter")?.addEventListener("change", async () => {
+  $("eventFilter")?.addEventListener("change", () => {
     carregarEventos();
   });
 
   $("intervalo")?.addEventListener("change", async () => {
     await carregarConsumo();
-    carregarGrafico();
+    await carregarGraficoPrincipal();
     carregarKPIsETabela();
+  });
+
+  $("chartMode")?.addEventListener("change", async () => {
+    await carregarGraficoPrincipal();
   });
 
   $("btnAplicar")?.addEventListener("click", async () => {
