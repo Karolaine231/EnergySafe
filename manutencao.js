@@ -80,7 +80,7 @@ async function getJSON(path, params = {}, retries = 2) {
         throw error;
       }
 
-      await new Promise(r => setTimeout(r, 1500 * (attempt + 1)));
+      await new Promise(resolve => setTimeout(resolve, 1500 * (attempt + 1)));
     }
   }
 }
@@ -118,7 +118,7 @@ function formatDateBR(dt) {
 
 function exportCsv(filename, rows) {
   const csv = rows
-    .map(r => r.map(v => `"${String(v ?? "").replaceAll('"', '""')}"`).join(";"))
+    .map(row => row.map(value => `"${String(value ?? "").replaceAll('"', '""')}"`).join(";"))
     .join("\n");
 
   const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
@@ -156,7 +156,12 @@ function showFeedback(msg, tipo = "info") {
 
   box.style.display = "block";
   box.textContent = msg;
-  box.className = "feedback " + tipo;
+  box.className = `feedback-bar ${tipo}`;
+
+  clearTimeout(showFeedback._timer);
+  showFeedback._timer = setTimeout(() => {
+    hideFeedback();
+  }, 3500);
 }
 
 function hideFeedback() {
@@ -165,7 +170,7 @@ function hideFeedback() {
 
   box.style.display = "none";
   box.textContent = "";
-  box.className = "feedback";
+  box.className = "feedback-bar";
 }
 
 function setButtonLoading(btn, loading, textLoading = "Carregando...") {
@@ -193,6 +198,7 @@ function formatNivel(nivel) {
    Estado
 ------------------------------------------------------------ */
 let chartW = null;
+let chartMedicoes = null;
 
 let locaisCache = [];
 let quadrosCache = [];
@@ -232,7 +238,7 @@ function adaptDispositivo(item) {
 function adaptConsumo(item) {
   return {
     id: pick(item, "id"),
-    canal_id: pick(item, "canal_id", "canalId"),
+    canal_id: pick(item, "canal_id", "canalId", "sensor_id"),
     data: pick(item, "data", "date"),
     kwh: Number(pick(item, "kwh", "consumo_kwh") || 0)
   };
@@ -405,10 +411,25 @@ async function carregarDispositivos(quadroId = "") {
 }
 
 async function carregarConsumo() {
-  consumoCache = asArray(await getJSON("/consumo", {
-    skip: 0,
-    limit: 500
-  })).map(adaptConsumo);
+  const localId = $("local")?.value || "";
+  const quadroId = $("quadro")?.value || "";
+  const sensorId = $("dispositivo")?.value || "";
+
+  const params = { skip: 0, limit: 500 };
+
+  if (sensorId) params.sensor_id = sensorId;
+  else if (quadroId) params.quadro_id = quadroId;
+  else if (localId) params.local_id = localId;
+
+  const raw = await getJSON("/consumo", params);
+  const dados = Array.isArray(raw) ? raw : (raw?.dados ?? []);
+
+  consumoCache = dados.map(item => ({
+    id: pick(item, "id") ?? null,
+    canal_id: pick(item, "sensor_id", "canal_id") ?? null,
+    data: pick(item, "data") ?? null,
+    kwh: Number(pick(item, "kwh") || 0)
+  }));
 
   return consumoCache;
 }
@@ -430,6 +451,45 @@ async function carregarMedicoesGerais() {
   })).map(adaptMedicao);
 
   return medicoesCache;
+}
+
+/* ------------------------------------------------------------
+   Resolver alerta
+------------------------------------------------------------ */
+async function resolverAlerta(alertaId, botao = null) {
+  try {
+    if (botao) {
+      botao.disabled = true;
+      botao.textContent = "Resolvendo...";
+    }
+
+    const response = await fetch(`${API_BASE}/alertas/${alertaId}/resolver`, {
+      method: "PATCH",
+      headers: {
+        Accept: "application/json"
+      }
+    });
+
+    if (!response.ok) {
+      const text = await response.text();
+      throw new Error(`Falha ao resolver alerta ${alertaId}: ${text}`);
+    }
+
+    showFeedback("Alerta marcado como resolvido com sucesso.", "info");
+
+    await carregarAlertasAPI();
+    carregarKPIsETabela();
+    carregarAlertasUI();
+    carregarEventos();
+  } catch (error) {
+    console.error(error);
+    showFeedback(`Não foi possível resolver o alerta: ${error.message}`, "error");
+
+    if (botao) {
+      botao.disabled = false;
+      botao.textContent = "Resolver";
+    }
+  }
 }
 
 /* ------------------------------------------------------------
@@ -464,7 +524,7 @@ function carregarKPIsETabela() {
     lista = lista.filter(d => String(d.id) === String(dispositivoId));
   }
 
-  const totalPeriodo = agrupado.reduce((s, i) => s + i.kwh, 0);
+  const totalPeriodo = agrupado.reduce((soma, item) => soma + item.kwh, 0);
 
   lista.forEach(dispositivo => {
     const tr = document.createElement("tr");
@@ -496,26 +556,36 @@ function carregarAlertasUI() {
   const ativos = alertasCache.filter(a => !a.resolvido);
 
   if (!ativos.length) {
-    ul.innerHTML = `<li class="alert"><p>Nenhum alerta encontrado.</p></li>`;
+    ul.innerHTML = `<li class="alert-item"><p>Nenhum alerta pendente.</p></li>`;
     return;
   }
 
   ativos.slice(0, 12).forEach(alerta => {
     const li = document.createElement("li");
-    li.className = "alert";
+    li.className = "alert-item";
 
     const nivelClass = NIVEL_CLASS[String(alerta.nivel || "").toLowerCase()] || "";
 
     li.innerHTML = `
-      <div class="title">
+      <div class="alert-title">
         <span>${formatTipo(alerta.tipo)}</span>
         <span class="tag ${nivelClass}">${formatNivel(alerta.nivel)}</span>
       </div>
       <p>${alerta.mensagem || "Sem descrição"}</p>
       <p>Valor: ${alerta.valor} • Limite: ${alerta.limite} • ${formatDt(alerta.timestamp)}</p>
+      <div class="alert-actions">
+        <span class="tag warn">Pendente</span>
+        <button class="btn-resolver" data-id="${alerta.id}">Resolver</button>
+      </div>
     `;
 
     ul.appendChild(li);
+  });
+
+  ul.querySelectorAll(".btn-resolver").forEach(btn => {
+    btn.addEventListener("click", () => {
+      resolverAlerta(btn.dataset.id, btn);
+    });
   });
 }
 
@@ -534,7 +604,7 @@ function carregarEventos() {
   tbody.innerHTML = "";
 
   if (!historico.length) {
-    tbody.innerHTML = `<tr><td colspan="6">Nenhum evento encontrado.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7">Nenhum evento encontrado.</td></tr>`;
     return;
   }
 
@@ -548,14 +618,27 @@ function carregarEventos() {
       <td><span class="tag ${NIVEL_CLASS[evento.nivel] || ""}">${formatNivel(evento.nivel)}</span></td>
       <td>${dispositivoLabel}</td>
       <td>${evento.mensagem || `Valor ${evento.valor || 0} / Limite ${evento.limite || 0}`}</td>
-      <td><span class="tag ${evento.resolvido ? "" : "warn"}">${evento.resolvido ? "Resolvido" : "Aberto"}</span></td>
+      <td><span class="tag ${evento.resolvido ? "" : "warn"}">${evento.resolvido ? "Resolvido" : "Pendente"}</span></td>
+      <td>
+        ${
+          evento.resolvido
+            ? `<span style="opacity:.6">Sem ação</span>`
+            : `<button class="btn-resolver" data-id="${evento.id}">Resolver</button>`
+        }
+      </td>
     `;
     tbody.appendChild(tr);
+  });
+
+  tbody.querySelectorAll(".btn-resolver").forEach(btn => {
+    btn.addEventListener("click", () => {
+      resolverAlerta(btn.dataset.id, btn);
+    });
   });
 }
 
 /* ------------------------------------------------------------
-   Gráfico
+   Gráfico principal
 ------------------------------------------------------------ */
 function setChartTexts(title, subtitle, hint) {
   if ($("chartTitle")) $("chartTitle").textContent = title;
@@ -775,6 +858,92 @@ async function carregarGraficoPrincipal() {
 }
 
 /* ------------------------------------------------------------
+   Gráfico de medições
+------------------------------------------------------------ */
+function renderGraficoMedicoes(modo) {
+  if (!medicoesCache.length) return;
+
+  const campo = modo === "corrente" ? "corrente" : "tensao";
+  const sufixo = campo === "tensao" ? " V" : " A";
+  const serie = agruparSeriePorCampo(medicoesCache, campo);
+
+  const ctx = $("chartMedicoes");
+  if (!ctx) return;
+
+  if (chartMedicoes) {
+    chartMedicoes.destroy();
+    chartMedicoes = null;
+  }
+
+  if (!serie.length) return;
+
+  chartMedicoes = new Chart(ctx, {
+    data: {
+      labels: serie.map(item => new Date(item.data + "T00:00:00").toLocaleDateString("pt-BR")),
+      datasets: [
+        {
+          type: "bar",
+          label: campo === "tensao" ? "Tensão média (V)" : "Corrente média (A)",
+          data: serie.map(item => +Number(item.valor).toFixed(2)),
+          borderWidth: 1,
+          borderRadius: 4,
+          backgroundColor: "rgba(139,92,246,0.28)",
+          borderColor: "rgba(139,92,246,0.88)"
+        },
+        {
+          type: "line",
+          label: "Tendência",
+          data: serie.map(item => +Number(item.valor).toFixed(2)),
+          borderColor: "rgba(56,189,248,1)",
+          borderWidth: 2,
+          pointRadius: 3,
+          tension: 0.3,
+          fill: false
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: {
+          display: true,
+          labels: {
+            color: "rgba(234,240,255,.8)",
+            boxWidth: 12
+          }
+        },
+        tooltip: {
+          callbacks: {
+            label: context => ` ${context.dataset.label}: ${Number(context.parsed.y).toFixed(2)}${sufixo}`
+          }
+        }
+      },
+      scales: {
+        x: {
+          ticks: {
+            color: "rgba(234,240,255,.65)",
+            maxRotation: 45
+          },
+          grid: {
+            color: "rgba(255,255,255,.06)"
+          }
+        },
+        y: {
+          beginAtZero: false,
+          ticks: {
+            color: "rgba(234,240,255,.65)"
+          },
+          grid: {
+            color: "rgba(255,255,255,.06)"
+          }
+        }
+      }
+    }
+  });
+}
+
+/* ------------------------------------------------------------
    UI
 ------------------------------------------------------------ */
 function atualizarSubtitulo() {
@@ -782,7 +951,9 @@ function atualizarSubtitulo() {
   const quadroText = $("quadro")?.selectedOptions?.[0]?.textContent || "-";
   const dispositivoText = $("dispositivo")?.selectedOptions?.[0]?.textContent || "Todos os dispositivos";
 
-  $("subtitle").textContent = `Filtro: ${localText} • ${quadroText} • ${dispositivoText}`;
+  if ($("subtitle")) {
+    $("subtitle").textContent = `Filtro: ${localText} • ${quadroText} • ${dispositivoText}`;
+  }
 }
 
 async function carregarPainelCompleto() {
@@ -793,33 +964,29 @@ async function carregarPainelCompleto() {
   setButtonLoading($("btnRefresh"), true);
 
   try {
+    const localId = $("local")?.value || "";
     const quadroId = $("quadro")?.value || "";
-
-    if (!quadroId) {
-      consumoCache = [];
-      alertasCache = [];
-      eventosCache = [];
-      medicoesCache = [];
-      carregarKPIsETabela();
-      destruirGrafico();
-      carregarEventos();
-      carregarAlertasUI();
-      setStatusText("Selecione um quadro", "warn");
-      return;
-    }
-
-    showFeedback(
-      "Exibindo visão geral do quadro. O filtro de dispositivo refina a tabela e o modo 'Consumo por dispositivo'.",
-      "info"
-    );
 
     await Promise.all([carregarConsumo(), carregarAlertasAPI()]);
     medicoesCache = [];
 
     carregarKPIsETabela();
-    await carregarGraficoPrincipal();
     carregarAlertasUI();
     carregarEventos();
+
+    if (consumoCache.length) {
+      await carregarGraficoPrincipal();
+    } else {
+      destruirGrafico();
+    }
+
+    if (!localId && !quadroId) {
+      showFeedback("Exibindo visão geral de todos os locais.", "info");
+    } else if (localId && !quadroId) {
+      showFeedback("Exibindo consumo por quadro do local selecionado.", "info");
+    } else {
+      showFeedback("Exibindo visão geral do quadro. O filtro de dispositivo refina a tabela e o modo 'Consumo por dispositivo'.", "info");
+    }
 
     setStatusText("Atualizado agora", "ok");
   } catch (error) {
@@ -860,7 +1027,7 @@ function configurarExportacoes() {
         formatNivel(evento.nivel),
         nomeDispositivoHistorico(),
         evento.mensagem || "—",
-        evento.resolvido ? "Resolvido" : "Aberto"
+        evento.resolvido ? "Resolvido" : "Pendente"
       ]);
     });
 
@@ -869,8 +1036,8 @@ function configurarExportacoes() {
 }
 
 function configurarEventosUI() {
-  $("local")?.addEventListener("change", async e => {
-    await carregarQuadros(e.target.value || "");
+  $("local")?.addEventListener("change", async event => {
+    await carregarQuadros(event.target.value || "");
 
     const quadro = $("quadro");
     const dispositivo = $("dispositivo");
@@ -884,8 +1051,8 @@ function configurarEventosUI() {
     await carregarPainelCompleto();
   });
 
-  $("quadro")?.addEventListener("change", async e => {
-    await carregarDispositivos(e.target.value || "");
+  $("quadro")?.addEventListener("change", async event => {
+    await carregarDispositivos(event.target.value || "");
 
     const dispositivo = $("dispositivo");
     if (dispositivo) dispositivo.value = "";
@@ -914,6 +1081,10 @@ function configurarEventosUI() {
     await carregarGraficoPrincipal();
   });
 
+  $("chartModeMedicoes")?.addEventListener("change", event => {
+    renderGraficoMedicoes(event.target.value);
+  });
+
   $("btnAplicar")?.addEventListener("click", async () => {
     await carregarPainelCompleto();
   });
@@ -923,12 +1094,71 @@ function configurarEventosUI() {
   });
 }
 
+/* ------------------------------------------------------------
+   Navegação entre páginas
+------------------------------------------------------------ */
+const pageTitles = {
+  consumo: "Consumo",
+  medicoes: "Medições",
+  alertas: "Alertas",
+  dispositivos: "Dispositivos"
+};
+
+function abrirSidebar() {
+  $("sidenav")?.classList.add("open");
+  $("navOverlay")?.classList.add("open");
+}
+
+function fecharSidebar() {
+  $("sidenav")?.classList.remove("open");
+  $("navOverlay")?.classList.remove("open");
+}
+
+function navegarPara(pageId) {
+  document.querySelectorAll(".page").forEach(page => page.classList.remove("active"));
+  document.querySelectorAll(".nav-item").forEach(button => button.classList.remove("active"));
+
+  const page = document.getElementById("page-" + pageId);
+  if (page) page.classList.add("active");
+
+  const btn = document.querySelector(`.nav-item[data-page="${pageId}"]`);
+  if (btn) btn.classList.add("active");
+
+  const title = $("pageTitle");
+  if (title) title.textContent = pageTitles[pageId] || pageId;
+
+  fecharSidebar();
+
+  if (pageId === "medicoes") {
+    const modo = $("chartModeMedicoes")?.value || "tensao";
+
+    if (!medicoesCache.length) {
+      carregarMedicoesGerais().then(() => renderGraficoMedicoes(modo)).catch(console.error);
+    } else {
+      renderGraficoMedicoes(modo);
+    }
+  }
+}
+
+function configurarNavegacao() {
+  document.querySelectorAll(".nav-item").forEach(btn => {
+    btn.addEventListener("click", () => navegarPara(btn.dataset.page));
+  });
+
+  $("btnMenu")?.addEventListener("click", abrirSidebar);
+  $("navOverlay")?.addEventListener("click", fecharSidebar);
+}
+
+/* ------------------------------------------------------------
+   Inicialização
+------------------------------------------------------------ */
 document.addEventListener("DOMContentLoaded", async () => {
   try {
     setStatusText("Inicializando...", "warn");
-    await carregarLocais();
+    configurarNavegacao();
     configurarEventosUI();
     configurarExportacoes();
+    await carregarLocais();
     await carregarPainelCompleto();
   } catch (error) {
     console.error(error);
