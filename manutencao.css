@@ -1183,11 +1183,38 @@ select:focus, input:focus{
       flex-wrap: wrap;
     }
 
-.sidenav {
-  overflow: hidden;
+.sidenav-nav {
+  flex: 1;
+  padding: 16px 12px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+
+  scrollbar-width: thin;
+  scrollbar-color: rgba(56, 189, 248, 0.45) rgba(255, 255, 255, 0.06);
 }
 
-.sidenav-nav {
-  padding-right: 6px;
+.sidenav-nav::-webkit-scrollbar {
+  width: 10px;
+}
+
+.sidenav-nav::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 999px;
+}
+
+.sidenav-nav::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, rgba(56, 189, 248, 0.55), rgba(34, 197, 94, 0.45));
+  border-radius: 999px;
+  border: 2px solid rgba(15, 23, 42, 0.35);
+}
+
+.sidenav-nav::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, rgba(56, 189, 248, 0.75), rgba(34, 197, 94, 0.60));
+}
+
+.sidenav-nav::-webkit-scrollbar-corner {
+  background: transparent;
 }
     
