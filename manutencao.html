@@ -8,228 +8,283 @@
   <link rel="icon" type="image/png" sizes="32x32" href="EnergiaVerdeLogo.png">
   <link rel="stylesheet" href="manutencao.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-
-  <style>
-    .feedback {
-      white-space: pre-wrap;
-    }
-  </style>
 </head>
 
 <body>
-  <div class="app">
+<div class="app">
 
-    <aside class="sidebar">
-      <div class="sb-top">
-        <img src="EnergiaVerdeLogo.png" class="sb-logo" alt="Energia Verde">
-        <div class="sb-title">
-          <div class="name">Safe Energy</div>
-          <div class="sub">Manutenção • Consumo diário e alertas</div>
-        </div>
+  <div class="nav-overlay" id="navOverlay"></div>
+
+  <!-- ══════════════════════════════════════
+       SIDEBAR
+  ══════════════════════════════════════ -->
+  <aside class="sidenav" id="sidenav">
+
+    <div class="sidenav-brand">
+      <img src="EnergiaVerdeLogo.png" alt="Safe Energy">
+      <div>
+        <div class="brand-name">Safe Energy</div>
+        <div class="brand-sub">Monitoramento de consumo</div>
+      </div>
+    </div>
+
+    <!-- Filtros compactos -->
+    <div class="sidenav-filters">
+      <div class="filter-label">Filtros</div>
+
+      <div class="filter-field">
+        <span>Local</span>
+        <select id="local"><option value="">Carregando...</option></select>
       </div>
 
-      <div class="sb-section">
-        <div class="sb-label">Filtros</div>
-
-        <label class="field">
-          <span>Local</span>
-          <select id="local">
-            <option value="">Carregando...</option>
-          </select>
-        </label>
-
-        <label class="field">
-          <span>Quadro</span>
-          <select id="quadro">
-            <option value="">Todos os quadros</option>
-          </select>
-        </label>
-
-        <label class="field">
-          <span>Dispositivo</span>
-          <select id="dispositivo">
-            <option value="">Todos os dispositivos</option>
-          </select>
-        </label>
-
-        <button class="btn btn-ghost" id="btnAplicar">Aplicar</button>
+      <div class="filter-field">
+        <span>Quadro</span>
+        <select id="quadro"><option value="">Todos</option></select>
       </div>
 
-      <div class="sb-section">
-        <div class="sb-label">Ações</div>
-        <button class="btn btn-primary" id="btnRefresh">Atualizar</button>
-        <button class="btn btn-ghost" id="btnExportSensors">Exportar CSV (dispositivos)</button>
-        <button class="btn btn-ghost" id="btnExportEvents">Exportar CSV (eventos)</button>
+      <div class="filter-field">
+        <span>Dispositivo</span>
+        <select id="dispositivo"><option value="">Todos</option></select>
       </div>
-    </aside>
 
-    <main class="main">
-      <header class="topbar">
-        <div class="left">
-          <h1>Painel de Manutenção</h1>
-          <p id="subtitle">Visão geral de consumo diário e alertas</p>
+      <button class="btn-aplicar" id="btnAplicar">Aplicar filtros</button>
+    </div>
+
+    <!-- ── Navegação principal — botões grandes ── -->
+    <nav class="sidenav-nav">
+      <div class="nav-section-label">Painéis</div>
+
+      <button class="nav-item active" data-page="consumo">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="3" width="20" height="14" rx="2"/>
+          <path d="M8 21h8M12 17v4"/>
+        </svg>
+        Consumo
+      </button>
+
+      <button class="nav-item" data-page="medicoes">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M22 12h-4l-3 9L9 3l-3 9H2"/>
+        </svg>
+        Medições
+      </button>
+
+      <button class="nav-item" data-page="alertas">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+          <line x1="12" y1="9" x2="12" y2="13"/>
+          <line x1="12" y1="17" x2="12.01" y2="17"/>
+        </svg>
+        Alertas
+      </button>
+
+      <button class="nav-item" data-page="dispositivos">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="7" width="20" height="14" rx="2"/>
+          <path d="M16 3H8M12 3v4"/>
+        </svg>
+        Dispositivos
+      </button>
+    </nav>
+
+    <!-- Ações -->
+    <div class="sidenav-actions">
+      <button class="btn-action primary" id="btnRefresh">↺ Atualizar dados</button>
+      <button class="btn-action" id="btnExportSensors">⬇ Exportar dispositivos (CSV)</button>
+      <button class="btn-action" id="btnExportEvents">⬇ Exportar alertas (CSV)</button>
+    </div>
+  </aside>
+
+  <!-- ══════════════════════════════════════
+       CONTEÚDO
+  ══════════════════════════════════════ -->
+  <div class="content">
+
+    <header class="topbar">
+      <div style="display:flex;align-items:center;gap:12px">
+        <button class="btn-menu" id="btnMenu">☰</button>
+        <div class="topbar-left">
+          <h1 id="pageTitle">Consumo</h1>
+          <p id="subtitle">Selecione os filtros para detalhar</p>
         </div>
-
-        <div class="right">
-          <div class="status" id="statusTag">
-            <span class="dot"></span>
-            <span>Aguardando carga</span>
-          </div>
-          <a class="btn btn-ghost" href="index.html">Sair</a>
+      </div>
+      <div class="topbar-right">
+        <div class="status-pill" id="statusTag">
+          <span class="dot"></span>
+          <span>Aguardando</span>
         </div>
-      </header>
+        <a class="btn-sair" href="index.html">Sair</a>
+      </div>
+    </header>
 
-      <div id="feedbackBox" class="feedback" style="display:none;"></div>
+    <div id="feedbackBox" class="feedback-bar"></div>
 
-      <section class="kpis">
-        <div class="kpi">
-          <div class="kpi-label">Dispositivos ativos</div>
-          <div class="kpi-value" id="kpiOnline">—</div>
-          <div class="kpi-sub">Cadastro marcado como ativo</div>
+    <!-- KPIs sempre visíveis -->
+    <div class="kpis-bar">
+      <div class="kpi-card">
+        <div class="kpi-label">Disp. ativos</div>
+        <div class="kpi-value" id="kpiOnline">—</div>
+        <div class="kpi-sub">Cadastro ativo</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Disp. inativos</div>
+        <div class="kpi-value" id="kpiOffline" style="color:#fb7185">—</div>
+        <div class="kpi-sub">Cadastro inativo</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Alertas pendentes</div>
+        <div class="kpi-value" id="kpiAtraso" style="color:#fbbf24">—</div>
+        <div class="kpi-sub">Não resolvidos</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Total alertas</div>
+        <div class="kpi-value" id="kpiAlerts">—</div>
+        <div class="kpi-sub">Retornados pela API</div>
+      </div>
+    </div>
+
+    <!-- ──────────────────────────────
+         PÁGINA: CONSUMO
+    ────────────────────────────── -->
+    <div class="page active" id="page-consumo">
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <h2 id="chartTitle">Consumo diário geral</h2>
+            <p id="chartSubtitle">Visualização conforme o nível retornado pela API.</p>
+          </div>
+          <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+            <label class="chip">
+              Gráfico
+              <select id="chartMode">
+                <option value="consumo_geral" selected>Consumo geral</option>
+                <option value="consumo_dispositivo">Por dispositivo</option>
+              </select>
+            </label>
+            <label class="chip">
+              Período
+              <select id="intervalo">
+                <option value="7">7 dias</option>
+                <option value="15">15 dias</option>
+                <option value="30" selected>30 dias</option>
+              </select>
+            </label>
+          </div>
         </div>
-
-        <div class="kpi">
-          <div class="kpi-label">Dispositivos inativos</div>
-          <div class="kpi-value danger" id="kpiOffline">—</div>
-          <div class="kpi-sub">Cadastro marcado como inativo</div>
+        <div class="chart-wrap">
+          <canvas id="chartW"></canvas>
         </div>
+        <div class="chart-hint" id="chartHint">Atualizado automaticamente conforme os filtros.</div>
+      </div>
+    </div>
 
-        <div class="kpi">
-          <div class="kpi-label">Alertas ativos</div>
-          <div class="kpi-value warn" id="kpiAtraso">—</div>
-          <div class="kpi-sub">Alertas não resolvidos</div>
+    <!-- ──────────────────────────────
+         PÁGINA: MEDIÇÕES
+    ────────────────────────────── -->
+    <div class="page" id="page-medicoes">
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <h2>Tensão e corrente</h2>
+            <p>Médias diárias de tensão (V) e corrente (A) do período.</p>
+          </div>
+          <label class="chip">
+            Tipo
+            <select id="chartModeMedicoes">
+              <option value="tensao" selected>Tensão (V)</option>
+              <option value="corrente">Corrente (A)</option>
+            </select>
+          </label>
         </div>
-
-        <div class="kpi">
-          <div class="kpi-label">Eventos no histórico</div>
-          <div class="kpi-value" id="kpiAlerts">—</div>
-          <div class="kpi-sub">Total retornado pela API</div>
+        <div class="chart-wrap">
+          <canvas id="chartMedicoes"></canvas>
         </div>
-      </section>
+        <div class="chart-hint">Selecione um quadro ou dispositivo para filtrar as medições.</div>
+      </div>
+    </div>
 
-      <section class="grid">
-        <article class="card card-wide">
-          <div class="card-head">
-            <div>
-              <h2 id="chartTitle">Consumo diário geral</h2>
-              <p id="chartSubtitle">Barras com linha e pontos mostrando a evolução diária do consumo.</p>
-            </div>
-
-            <div class="mini-actions">
-              <label class="chip">
-                Gráfico
-                <select id="chartMode">
-                  <option value="consumo_geral" selected>Consumo diário geral</option>
-                  <option value="tensao">Consumo de tensão</option>
-                  <option value="corrente">Consumo de corrente</option>
-                  <option value="consumo_dispositivo">Consumo por dispositivo</option>
-                </select>
-              </label>
-
-              <label class="chip">
-                Mostrar
-                <select id="intervalo">
-                  <option value="7">Últimos 7 dias</option>
-                  <option value="15">Últimos 15 dias</option>
-                  <option value="30" selected>Últimos 30 dias</option>
-                </select>
-              </label>
-            </div>
+    <!-- ──────────────────────────────
+         PÁGINA: ALERTAS
+    ────────────────────────────── -->
+    <div class="page" id="page-alertas">
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <h2>Alertas pendentes</h2>
+            <p>Alertas ainda não resolvidos no contexto selecionado.</p>
           </div>
+        </div>
+        <ul class="alerts" id="alertsList">
+          <li class="alert-item"><p>Carregando alertas...</p></li>
+        </ul>
+      </div>
 
-          <div class="chart-wrap">
-            <canvas id="chartW"></canvas>
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <h2>Histórico de alertas</h2>
+            <p>Todos os eventos do contexto selecionado.</p>
           </div>
+          <label class="chip">
+            Tipo
+            <select id="eventFilter">
+              <option value="">Todos</option>
+              <option value="sobrecorrente">Sobrecorrente</option>
+              <option value="consumo_fora_horario">Fora do horário</option>
+              <option value="queda_brusca">Queda brusca</option>
+            </select>
+          </label>
+        </div>
+        <div class="table-wrap">
+          <table class="table" id="tableEvents">
+            <thead>
+              <tr>
+                <th>Data/hora</th>
+                <th>Tipo</th>
+                <th>Severidade</th>
+                <th>Dispositivo</th>
+                <th>Descrição</th>
+                <th>Status</th>
+                <th>Ação</th>
+              </tr>
+            </thead>
+            <tbody><tr><td colspan="7">Carregando...</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
 
-          <div class="hint" id="chartHint">
-            O gráfico aparece automaticamente ao carregar a página.
+    <!-- ──────────────────────────────
+         PÁGINA: DISPOSITIVOS
+    ────────────────────────────── -->
+    <div class="page" id="page-dispositivos">
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <h2>Dispositivos do quadro</h2>
+            <p>Todos por padrão. Selecione um dispositivo no filtro para refinar.</p>
           </div>
-        </article>
+        </div>
+        <div class="table-wrap">
+          <table class="table" id="tableSensors">
+            <thead>
+              <tr>
+                <th>Dispositivo</th><th>Status</th>
+                <th>Última data</th><th>Consumo (período)</th>
+              </tr>
+            </thead>
+            <tbody><tr><td colspan="4">Selecione um quadro.</td></tr></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
 
-        <article class="card">
-          <div class="card-head">
-            <div>
-              <h2>Dispositivos do quadro</h2>
-              <p>Mostra todos por padrão. O filtro de dispositivo refina esta tabela.</p>
-            </div>
-          </div>
-
-          <div class="table-wrap">
-            <table class="table" id="tableSensors">
-              <thead>
-                <tr>
-                  <th>Dispositivo</th>
-                  <th>Status</th>
-                  <th>Último dia</th>
-                  <th>kWh</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr><td colspan="4">Selecione um quadro.</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </article>
-
-        <article class="card">
-          <div class="card-head">
-            <div>
-              <h2>Alertas técnicos</h2>
-              <p>Alertas ativos visíveis mesmo sem filtro.</p>
-            </div>
-          </div>
-
-          <ul class="alerts" id="alertsList">
-            <li class="alert"><p>Carregando alertas...</p></li>
-          </ul>
-        </article>
-
-        <article class="card card-wide">
-          <div class="card-head">
-            <div>
-              <h2>Histórico de alertas</h2>
-              <p>Eventos registrados pela API. O filtro por tipo continua disponível.</p>
-            </div>
-
-            <div class="mini-actions">
-              <label class="chip">
-                Tipo
-                <select id="eventFilter">
-                  <option value="">Todos</option>
-                  <option value="sobrecorrente">Sobrecorrente</option>
-                  <option value="consumo_fora_horario">Consumo fora do horário</option>
-                  <option value="queda_brusca">Queda brusca</option>
-                </select>
-              </label>
-            </div>
-          </div>
-
-          <div class="table-wrap">
-            <table class="table" id="tableEvents">
-              <thead>
-                <tr>
-                  <th>Data/hora</th>
-                  <th>Tipo</th>
-                  <th>Severidade</th>
-                  <th>Dispositivo</th>
-                  <th>Descrição</th>
-                  <th>Status</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr><td colspan="6">Carregando eventos...</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </article>
-      </section>
-
-      <footer class="footer">
-        Safe Energy • Manutenção
-      </footer>
-    </main>
+    <footer style="padding:0 24px 20px;font-size:12px;color:rgba(234,240,255,.35)">
+      Safe Energy • Manutenção
+    </footer>
   </div>
+</div>
 
-  <script src="manutencao.js"></script>
+<script src="manutencao.js"></script>
 </body>
 </html>
