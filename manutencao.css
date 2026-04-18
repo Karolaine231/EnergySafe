@@ -1183,4 +1183,11 @@ select:focus, input:focus{
       flex-wrap: wrap;
     }
 
+.sidenav {
+  overflow: hidden;
+}
+
+.sidenav-nav {
+  padding-right: 6px;
+}
     
