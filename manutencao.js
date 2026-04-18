@@ -710,7 +710,9 @@ function renderGraficoMisto(labels, valores, labelBarra, labelLinha, sufixo = ""
         x: {
           ticks: {
             color: "rgba(234,240,255,.65)",
-            maxRotation: 45
+            maxRotation: 50,
+            minRotation: 50,
+            autoSkip: false
           },
           grid: {
             color: "rgba(255,255,255,.06)"
@@ -907,10 +909,13 @@ function renderGraficoMedicoes(modo) {
       maintainAspectRatio: false,
       plugins: {
         legend: {
-          display: true,
-          labels: {
-            color: "rgba(234,240,255,.8)",
-            boxWidth: 12
+           display: true,
+            labels: {
+              color: "rgba(234,240,255,.8)",
+              boxWidth: 12,
+              font: {
+                size: 11
+              } 
           }
         },
         tooltip: {
