@@ -4,187 +4,503 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Safe Energy • Financeiro</title>
-
   <link rel="icon" type="image/png" sizes="32x32" href="EnergiaVerdeLogo.png">
-  <link rel="stylesheet" href="financeiro.css" />
-
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+  <style>
+    :root {
+      --bg-1: #0b1220;
+      --bg-2: #0a1b2e;
+      --text: #eaf0ff;
+      --muted: rgba(234,240,255,0.65);
+      --accent: #38bdf8;
+      --accent-2: #22c55e;
+      --border: rgba(255,255,255,0.14);
+      --card-bg: linear-gradient(135deg, rgba(255,255,255,0.13), rgba(255,255,255,0.07));
+      --shadow: 0 18px 55px rgba(0,0,0,.45);
+      --radius: 18px;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    html, body {
+      width: 100%; min-height: 100%; overflow-x: hidden;
+      color: var(--text);
+      background:
+        radial-gradient(900px 600px at 15% 15%, rgba(56,189,248,.20), transparent 60%),
+        radial-gradient(900px 600px at 85% 80%, rgba(34,197,94,.14), transparent 60%),
+        linear-gradient(180deg, var(--bg-1), var(--bg-2));
+    }
+
+    /* ── Layout ── */
+    .app { display: flex; min-height: 100vh; width: 100%; }
+
+    /* ══════════════════════════════════════
+       SIDEBAR
+    ══════════════════════════════════════ */
+    .sidenav {
+      width: 270px; flex-shrink: 0;
+      background: linear-gradient(180deg, rgba(255,255,255,0.13), rgba(255,255,255,0.07));
+      border-right: 1px solid var(--border);
+      backdrop-filter: blur(16px);
+      display: flex; flex-direction: column;
+      position: fixed; top: 0; left: 0;
+      height: 100vh; z-index: 100; overflow: hidden;
+      transition: transform .28s cubic-bezier(.4,0,.2,1);
+    }
+
+    .sidenav-brand {
+      display: flex; align-items: center; gap: 12px;
+      padding: 20px 18px 16px;
+      border-bottom: 1px solid rgba(255,255,255,0.10);
+      flex-shrink: 0;
+    }
+    .sidenav-brand img { width: 38px; height: 38px; object-fit: contain; filter: drop-shadow(0 0 14px rgba(56,189,248,.3)); }
+    .brand-name { font-size: 17px; font-weight: 900; letter-spacing: -0.01em; color: var(--text); }
+    .brand-sub  { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+
+    /* Filtros compactos */
+    .sidenav-filters {
+      flex-shrink: 0;
+      padding: 10px 12px;
+      border-bottom: 1px solid rgba(255,255,255,0.10);
+    }
+    .filter-label {
+      font-size: 10px; color: rgba(234,240,255,0.42);
+      text-transform: uppercase; letter-spacing: .13em; margin-bottom: 7px;
+    }
+    .filter-field {
+      display: flex; align-items: center;
+      justify-content: space-between; gap: 8px; margin-bottom: 6px;
+    }
+    .filter-field span { font-size: 11.5px; color: var(--muted); white-space: nowrap; min-width: 48px; }
+    .filter-field select, .filter-field input[type="date"] {
+      flex: 1; padding: 6px 8px; border-radius: 10px;
+      border: 1px solid var(--border);
+      background: rgba(8,14,25,0.55); color: var(--text);
+      font-size: 12px; outline: none;
+    }
+    .filter-field select:focus, .filter-field input:focus { border-color: rgba(56,189,248,.55); }
+
+    .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 6px; }
+    .row2 .filter-field { flex-direction: column; align-items: flex-start; }
+    .row2 .filter-field select, .row2 .filter-field input { width: 100%; }
+
+    .btn-aplicar {
+      width: 100%; margin-top: 4px; padding: 7px;
+      border-radius: 10px; border: 1px solid var(--border);
+      background: rgba(255,255,255,0.09); color: rgba(234,240,255,0.85);
+      font-size: 12px; font-weight: 700; cursor: pointer; transition: background .15s;
+    }
+    .btn-aplicar:hover { background: rgba(255,255,255,0.14); }
+
+    /* Menu de navegação */
+    .sidenav-nav {
+      flex: 1; padding: 16px 12px;
+      overflow-y: auto; display: flex; flex-direction: column; gap: 6px;
+    }
+    .nav-section-label {
+      font-size: 10px; color: rgba(234,240,255,0.38);
+      text-transform: uppercase; letter-spacing: .15em; padding: 0 6px 8px;
+    }
+    .nav-item {
+      display: flex; align-items: center; gap: 14px;
+      padding: 16px 18px; border-radius: 16px; cursor: pointer;
+      color: rgba(234,240,255,0.75); font-size: 15px; font-weight: 600;
+      letter-spacing: -0.01em;
+      transition: background .15s, color .15s, border-color .15s;
+      border: 1px solid transparent; background: transparent;
+      width: 100%; text-align: left;
+    }
+    .nav-item:hover { background: rgba(255,255,255,0.10); color: var(--text); border-color: rgba(255,255,255,0.10); }
+    .nav-item.active {
+      background: linear-gradient(135deg, rgba(56,189,248,.20), rgba(34,197,94,.14));
+      color: var(--text); border-color: rgba(56,189,248,.30); font-weight: 700;
+    }
+    .nav-icon { width: 22px; height: 22px; flex-shrink: 0; opacity: .85; }
+
+    /* Ações */
+    .sidenav-actions {
+      flex-shrink: 0; padding: 10px 12px 14px;
+      border-top: 1px solid rgba(255,255,255,0.10);
+      display: flex; flex-direction: column; gap: 6px;
+    }
+    .btn-action {
+      padding: 10px 14px; border-radius: 12px;
+      border: 1px solid var(--border); background: rgba(255,255,255,0.07);
+      color: rgba(234,240,255,0.78); font-size: 12.5px; font-weight: 600;
+      cursor: pointer; transition: background .15s; text-align: left;
+    }
+    .btn-action:hover { background: rgba(255,255,255,0.13); }
+    .btn-action.primary {
+      background: linear-gradient(135deg, rgba(56,189,248,.30), rgba(34,197,94,.22));
+      border-color: rgba(56,189,248,.32); color: var(--text);
+    }
+
+    /* ══════════════════════════════════════
+       CONTEÚDO
+    ══════════════════════════════════════ */
+    .content { margin-left: 270px; flex: 1; min-width: 0; display: flex; flex-direction: column; }
+
+    .topbar {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 18px 24px 14px; border-bottom: 1px solid rgba(255,255,255,0.08);
+      gap: 12px; flex-wrap: wrap;
+    }
+    .topbar-left h1 { font-size: 22px; font-weight: 900; letter-spacing: -0.02em; color: var(--text); }
+    .topbar-left p  { margin-top: 4px; font-size: 13px; color: var(--muted); }
+    .topbar-right   { display: flex; align-items: center; gap: 10px; }
+
+    .status-pill {
+      display: flex; align-items: center; gap: 8px;
+      padding: 8px 14px; border-radius: 999px;
+      border: 1px solid var(--border); background: rgba(8,14,25,0.35);
+      font-size: 12.5px; color: rgba(234,240,255,0.78);
+    }
+    .status-pill .dot { width: 8px; height: 8px; border-radius: 50%; background: #22c55e; }
+
+    .btn-sair {
+      padding: 8px 16px; border-radius: 12px;
+      border: 1px solid var(--border); background: rgba(255,255,255,0.08);
+      color: rgba(234,240,255,0.80); font-size: 13px; font-weight: 600;
+      cursor: pointer; text-decoration: none; transition: background .15s;
+    }
+    .btn-sair:hover { background: rgba(255,255,255,0.13); }
+
+    .btn-menu {
+      display: none; width: 40px; height: 40px; border-radius: 10px;
+      border: 1px solid var(--border); background: rgba(255,255,255,0.08);
+      color: var(--text); font-size: 20px; cursor: pointer;
+      align-items: center; justify-content: center; flex-shrink: 0;
+    }
+
+    /* Feedback */
+    .feedback-bar {
+      margin: 12px 24px 0; padding: 10px 14px;
+      border-radius: 12px; font-size: 13px; display: none;
+    }
+    .feedback-bar.info  { background: rgba(56,189,248,.12);  border: 1px solid rgba(56,189,248,.25);  color: rgba(234,240,255,.85); }
+    .feedback-bar.error { background: rgba(251,113,133,.12); border: 1px solid rgba(251,113,133,.25); color: rgba(234,240,255,.85); }
+    .feedback-bar.warn  { background: rgba(251,191,36,.12);  border: 1px solid rgba(251,191,36,.25);  color: rgba(234,240,255,.85); }
+
+    /* KPIs */
+    .kpis-bar {
+      display: grid; grid-template-columns: repeat(4,1fr);
+      gap: 12px; padding: 16px 24px;
+    }
+    .kpi-card {
+      background: rgba(255,255,255,0.09); border: 1px solid var(--border);
+      border-radius: 16px; padding: 14px 16px;
+    }
+    .kpi-card .kpi-label { font-size: 11px; color: rgba(234,240,255,0.50); text-transform: uppercase; letter-spacing: .10em; }
+    .kpi-card .kpi-value { font-size: 24px; font-weight: 900; margin-top: 8px; letter-spacing: -0.02em; color: var(--text); }
+    .kpi-card .kpi-sub   { font-size: 12px; color: var(--muted); margin-top: 4px; }
+
+    /* Páginas */
+    .page { display: none; padding: 0 24px 24px; }
+    .page.active { display: block; }
+
+    /* Cards */
+    .card {
+      background: var(--card-bg); border: 1px solid var(--border);
+      border-radius: var(--radius); box-shadow: var(--shadow);
+      backdrop-filter: blur(14px); padding: 16px;
+      position: relative; overflow: hidden; margin-bottom: 16px;
+    }
+    .card::before {
+      content: ""; position: absolute; top: 0; left: 0; right: 0; height: 2px;
+      background: linear-gradient(90deg, rgba(56,189,248,.7), rgba(34,197,94,.6));
+      opacity: .5;
+    }
+    .card-grid { display: grid; grid-template-columns: 1.4fr 0.9fr; gap: 16px; margin-bottom: 16px; }
+
+    .card-head {
+      display: flex; align-items: flex-start; justify-content: space-between;
+      gap: 12px; padding-bottom: 12px;
+      border-bottom: 1px solid rgba(255,255,255,0.09); margin-bottom: 14px; flex-wrap: wrap;
+    }
+    .card-head h2 { font-size: 15px; font-weight: 800; color: var(--text); }
+    .card-head p  { margin-top: 5px; font-size: 13px; color: var(--muted); }
+
+    .chip {
+      display: inline-flex; align-items: center; gap: 10px;
+      padding: 8px 14px; border-radius: 999px;
+      border: 1px solid var(--border); background: rgba(8,14,25,0.35);
+      font-size: 12px; color: rgba(234,240,255,0.78);
+    }
+    .chip input[type="number"] {
+      width: 80px; padding: 4px 8px; border-radius: 999px;
+      border: 1px solid var(--border); background: rgba(8,14,25,0.50);
+      color: var(--text); font-size: 12px; outline: none;
+    }
+    .chip select {
+      padding: 4px 8px; border-radius: 999px;
+      border: 1px solid var(--border); background: rgba(8,14,25,0.50);
+      color: var(--text); font-size: 12px; outline: none;
+    }
+
+    /* Gráficos */
+    .chart-wrap { position: relative; width: 100%; height: 340px; padding: 8px 4px 4px; }
+    .chart-wrap.small { height: 260px; }
+    .chart-wrap canvas { width: 100% !important; height: 100% !important; }
+
+    /* Legenda do doughnut */
+    .rateio-legend { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+    .leg-item { display: flex; align-items: center; gap: 8px; font-size: 13px; color: rgba(234,240,255,0.82); }
+    .leg-swatch { width: 11px; height: 11px; border-radius: 3px; flex-shrink: 0; }
+
+    /* Tabelas */
+    .table-wrap { overflow-x: auto; border-radius: 12px; border: 1px solid rgba(255,255,255,0.09); }
+    .table { width: 100%; border-collapse: collapse; min-width: 480px; }
+    .table th {
+      padding: 11px 14px; font-size: 11px; font-weight: 800;
+      text-transform: uppercase; letter-spacing: .10em;
+      color: rgba(234,240,255,0.50); background: rgba(8,14,25,0.20);
+      text-align: left; border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+    .table td { padding: 12px 14px; font-size: 13px; color: rgba(234,240,255,0.82); border-bottom: 1px solid rgba(255,255,255,0.06); }
+    .table tr:last-child td { border-bottom: none; }
+    .table tfoot td { background: rgba(8,14,25,0.25); font-weight: 900; border-top: 1px solid rgba(255,255,255,0.10); }
+
+    /* Tags */
+    .tag { display: inline-flex; align-items: center; padding: 4px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 700; border: 1px solid rgba(255,255,255,0.13); background: rgba(255,255,255,0.09); color: rgba(234,240,255,0.82); }
+    .tag.warn   { border-color: rgba(251,191,36,.35);  background: rgba(251,191,36,.10); }
+    .tag.danger { border-color: rgba(251,113,133,.35); background: rgba(251,113,133,.10); }
+    .tag.ok     { border-color: rgba(34,197,94,.35);   background: rgba(34,197,94,.10); }
+
+    /* Alertas */
+    .alerts-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 10px; }
+    .alert-item { padding: 12px 14px; border-radius: 14px; border: 1px solid rgba(255,255,255,0.12); background: rgba(8,14,25,0.25); }
+    .alert-item .alert-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; font-weight: 800; font-size: 13.5px; color: var(--text); }
+    .alert-item p { margin: 7px 0 0; font-size: 13px; color: var(--muted); line-height: 1.5; }
+
+    /* Fatura destaque */
+    .fatura-card {
+      padding: 14px 16px; border-radius: 14px;
+      border: 1px solid rgba(255,255,255,0.12); background: rgba(8,14,25,0.25);
+      cursor: pointer; transition: background .15s, border-color .15s;
+    }
+    .fatura-card:hover { background: rgba(56,189,248,.08); border-color: rgba(56,189,248,.25); }
+    .fatura-card.selected { background: rgba(56,189,248,.12); border-color: rgba(56,189,248,.35); }
+    .fatura-card h3 { font-size: 13.5px; font-weight: 700; color: var(--text); margin-bottom: 6px; }
+    .fatura-card .fatura-meta { display: flex; gap: 14px; flex-wrap: wrap; }
+    .fatura-card .fatura-meta span { font-size: 12px; color: var(--muted); }
+    .fatura-card .fatura-meta strong { color: var(--text); }
+    .faturas-lista { display: flex; flex-direction: column; gap: 8px; }
+
+    /* Overlay mobile */
+    .nav-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 99; }
+
+    /* ══════════════════════════════════════
+       RESPONSIVO
+    ══════════════════════════════════════ */
+    @media (max-width: 960px) {
+      .sidenav { transform: translateX(-100%); }
+      .sidenav.open { transform: translateX(0); box-shadow: 4px 0 32px rgba(0,0,0,.5); }
+      .nav-overlay.open { display: block; }
+      .content { margin-left: 0; }
+      .btn-menu { display: flex; }
+      .kpis-bar { grid-template-columns: repeat(2,1fr); }
+      .topbar { padding: 14px 16px 12px; }
+      .page { padding: 0 16px 20px; }
+      .feedback-bar { margin: 10px 16px 0; }
+      .kpis-bar { padding: 12px 16px; }
+      .card-grid { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 520px) {
+      .kpis-bar { grid-template-columns: 1fr 1fr; gap: 8px; padding: 10px 12px; }
+      .kpi-card .kpi-value { font-size: 20px; }
+      .chart-wrap { height: 260px; }
+      .topbar-left h1 { font-size: 18px; }
+    }
+  </style>
 </head>
 
 <body>
-  <div class="app">
-    <aside class="sidebar">
-      <div class="sb-top">
-        <img src="EnergiaVerdeLogo.png" class="sb-logo" alt="Energia Verde">
-        <div class="sb-title">
-          <div class="name">Safe Energy</div>
-          <div class="sub">Financeiro • Rateio e Indicadores</div>
-        </div>
+<div class="app">
+
+  <div class="nav-overlay" id="navOverlay"></div>
+
+  <!-- ══════════════════════════════════════
+       SIDEBAR
+  ══════════════════════════════════════ -->
+  <aside class="sidenav" id="sidenav">
+
+    <div class="sidenav-brand">
+      <img src="EnergiaVerdeLogo.png" alt="Safe Energy">
+      <div>
+        <div class="brand-name">Safe Energy</div>
+        <div class="brand-sub">Financeiro</div>
+      </div>
+    </div>
+
+    <!-- Filtros -->
+    <div class="sidenav-filters">
+      <div class="filter-label">Filtros</div>
+
+      <div class="filter-field">
+        <span>Local</span>
+        <select id="local"><option value="">Carregando...</option></select>
       </div>
 
-      <div class="sb-section">
-        <div class="sb-label">Filtros</div>
-
-        <label class="field">
-          <span>Período</span>
-          <select id="periodo">
-            <option value="7d">Últimos 7 dias</option>
-            <option value="30d" selected>Últimos 30 dias</option>
-            <option value="mtd">Mês atual (MTD)</option>
-            <option value="custom">Personalizado</option>
-          </select>
-        </label>
-
-        <div class="row2" id="customRange" style="display:none;">
-          <label class="field">
-            <span>De</span>
-            <input type="date" id="dateFrom" />
-          </label>
-
-          <label class="field">
-            <span>Até</span>
-            <input type="date" id="dateTo" />
-          </label>
-        </div>
-
-        <label class="field">
-          <span>Local</span>
-          <select id="local">
-            <option value="">Carregando...</option>
-          </select>
-        </label>
-
-        <label class="field">
-          <span>Quadro</span>
-          <select id="quadro">
-            <option value="">Selecione um local</option>
-          </select>
-        </label>
-
-        <label class="field">
-          <span>Circuito</span>
-          <select id="circuito">
-            <option value="">Selecione um quadro</option>
-          </select>
-        </label>
-
-        <button class="btn btn-ghost" id="btnAplicar">Aplicar filtros</button>
+      <div class="filter-field">
+        <span>Área</span>
+        <select id="area"><option value="">Todas</option></select>
       </div>
 
-      <div class="sb-section">
-        <div class="sb-label">Ações</div>
-        <button class="btn btn-primary" id="btnExportCsv">Exportar CSV</button>
-        <button class="btn btn-ghost" id="btnPrint">Gerar resumo (impressão)</button>
-      </div>
+      <button class="btn-aplicar" id="btnAplicar">Aplicar filtros</button>
+    </div>
 
-    </aside>
+    <!-- Menu de navegação -->
+    <nav class="sidenav-nav">
+      <div class="nav-section-label">Painéis</div>
 
-    <main class="main">
-      <header class="topbar">
-        <div class="left">
-          <h1>Visão Financeira</h1>
+      <button class="nav-item active" data-page="visao-geral">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>
+        </svg>
+        Visão Geral
+      </button>
+
+      <button class="nav-item" data-page="faturas">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/>
+          <polyline points="14 2 14 8 20 8"/>
+          <line x1="16" y1="13" x2="8" y2="13"/>
+          <line x1="16" y1="17" x2="8" y2="17"/>
+        </svg>
+        Faturas
+      </button>
+
+      <button class="nav-item" data-page="rateio">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M21.21 15.89A10 10 0 118 2.83"/><path d="M22 12A10 10 0 0012 2v10z"/>
+        </svg>
+        Rateio por Área
+      </button>
+
+      <button class="nav-item" data-page="metas">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/>
+        </svg>
+        Metas
+      </button>
+    </nav>
+
+    <!-- Ações -->
+    <div class="sidenav-actions">
+      <button class="btn-action primary" id="btnRefresh">↺ Atualizar dados</button>
+      <button class="btn-action" id="btnExportCsv">⬇ Exportar CSV</button>
+      <button class="btn-action" id="btnPrint">🖨 Gerar relatório</button>
+    </div>
+  </aside>
+
+  <!-- ══════════════════════════════════════
+       CONTEÚDO
+  ══════════════════════════════════════ -->
+  <div class="content">
+
+    <header class="topbar">
+      <div style="display:flex;align-items:center;gap:12px">
+        <button class="btn-menu" id="btnMenu">☰</button>
+        <div class="topbar-left">
+          <h1 id="pageTitle">Visão Geral</h1>
           <p id="subtitle">Resumo consolidado para rateio e indicadores</p>
         </div>
+      </div>
+      <div class="topbar-right">
+        <div class="status-pill" id="statusTag">
+          <span class="dot"></span>
+          <span>Aguardando</span>
+        </div>
+        <a class="btn-sair" href="index.html">Sair</a>
+      </div>
+    </header>
 
-        <div class="right">
-          <div class="status" id="statusTag">
-            <span class="dot"></span>
-            <span>Atualizado agora</span>
+    <div id="feedbackBox" class="feedback-bar"></div>
+
+    <!-- KPIs sempre visíveis -->
+    <div class="kpis-bar">
+      <div class="kpi-card">
+        <div class="kpi-label">Consumo total</div>
+        <div class="kpi-value" id="kpiKwh">—</div>
+        <div class="kpi-sub" id="kpiKwhSub">kWh acumulado</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Custo total (R$)</div>
+        <div class="kpi-value" id="kpiCusto">—</div>
+        <div class="kpi-sub">Soma das faturas</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Tarifa média</div>
+        <div class="kpi-value" id="kpiTarifa">—</div>
+        <div class="kpi-sub">R$/kWh calculado</div>
+      </div>
+      <div class="kpi-card">
+        <div class="kpi-label">Faturas</div>
+        <div class="kpi-value" id="kpiFaturas">—</div>
+        <div class="kpi-sub">Disponíveis no período</div>
+      </div>
+    </div>
+
+    <!-- ──────────────────────────────
+         PÁGINA: VISÃO GERAL
+    ────────────────────────────── -->
+    <div class="page active" id="page-visao-geral">
+
+      <!-- Gráfico de evolução mensal -->
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <h2>Evolução mensal do consumo</h2>
+            <p>kWh e custo (R$) por mês — baseado nas faturas cadastradas.</p>
           </div>
-
-          <a class="btn btn-ghost" href="index.html">Sair</a>
+          <label class="chip">
+            Visualizar
+            <select id="modoGrafico">
+              <option value="kwh">Consumo (kWh)</option>
+              <option value="custo">Custo (R$)</option>
+              <option value="ambos" selected>kWh + Custo</option>
+            </select>
+          </label>
         </div>
-      </header>
-
-      <section class="kpis">
-        <div class="kpi">
-          <div class="kpi-label">Consumo (kWh) • Período</div>
-          <div class="kpi-value" id="kpiKwhPeriodo">—</div>
-          <div class="kpi-sub" id="kpiKwhPeriodoSub">—</div>
+        <div class="chart-wrap">
+          <canvas id="chartEvolucao"></canvas>
         </div>
+      </div>
 
-        <div class="kpi">
-          <div class="kpi-label">Custo estimado (R$)</div>
-          <div class="kpi-value" id="kpiCusto">—</div>
-          <div class="kpi-sub">Tarifa configurável</div>
-        </div>
-
-        <div class="kpi">
-          <div class="kpi-label">Pico (W) • Período</div>
-          <div class="kpi-value" id="kpiPico">—</div>
-          <div class="kpi-sub">Maior potência registrada</div>
-        </div>
-
-        <div class="kpi">
-          <div class="kpi-label">Indicador de redução</div>
-          <div class="kpi-value" id="kpiReducao">—</div>
-          <div class="kpi-sub">Comparação vs baseline</div>
-        </div>
-      </section>
-
-      <section class="grid">
-        <article class="card card-wide">
-          <div class="card-head">
-            <div>
-              <h2>Consumo diário (kWh)</h2>
-              <p>Usado para acompanhamento e rateio.</p>
-            </div>
-
-            <div class="mini-actions">
-              <label class="chip">
-                Tarifa (R$/kWh)
-                <input id="tarifa" type="number" step="0.01" min="0" value="0.95">
-              </label>
-            </div>
-          </div>
-
-          <div class="chart-wrap">
-            <canvas id="chartKwh"></canvas>
-          </div>
-        </article>
-
-        <article class="card">
+      <!-- Rateio + Tabela -->
+      <div class="card-grid">
+        <div class="card" style="margin-bottom:0">
           <div class="card-head">
             <div>
               <h2>Rateio por área</h2>
-              <p>Distribuição percentual do consumo.</p>
+              <p>Distribuição percentual da fatura mais recente.</p>
             </div>
           </div>
-
           <div class="chart-wrap small">
             <canvas id="chartRateio"></canvas>
           </div>
+          <div class="rateio-legend" id="rateioLegend"></div>
+        </div>
 
-          <div class="legend" id="rateioLegend"></div>
-        </article>
-
-        <article class="card">
+        <div class="card" style="margin-bottom:0">
           <div class="card-head">
             <div>
-              <h2>Pontos de atenção</h2>
-              <p>Alertas com impacto no custo e operação.</p>
+              <h2>Resumo por fatura</h2>
+              <p>Visão consolidada para relatório.</p>
             </div>
           </div>
-
-          <ul class="alerts" id="alertsList"></ul>
-        </article>
-
-        <article class="card card-wide">
-          <div class="card-head">
-            <div>
-              <h2>Resumo consolidado</h2>
-              <p>Visão tabular para relatório.</p>
-            </div>
-          </div>
-
           <div class="table-wrap">
             <table class="table" id="tableResumo">
               <thead>
                 <tr>
-                  <th>Área</th>
-                  <th>kWh (período)</th>
-                  <th>%</th>
-                  <th>Custo estimado (R$)</th>
+                  <th>Mês</th>
+                  <th>kWh</th>
+                  <th>Valor (R$)</th>
+                  <th>R$/kWh</th>
                 </tr>
               </thead>
               <tbody></tbody>
@@ -192,21 +508,190 @@
                 <tr>
                   <td><strong>Total</strong></td>
                   <td id="tTotalKwh">—</td>
-                  <td>100%</td>
                   <td id="tTotalCost">—</td>
+                  <td id="tTotalTarifa">—</td>
                 </tr>
               </tfoot>
             </table>
           </div>
-        </article>
-      </section>
+        </div>
+      </div>
+    </div>
 
-      <footer class="footer">
-        Safe Energy • Financeiro
-      </footer>
-    </main>
+    <!-- ──────────────────────────────
+         PÁGINA: FATURAS
+    ────────────────────────────── -->
+    <div class="page" id="page-faturas">
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <h2>Faturas cadastradas</h2>
+            <p>Clique em uma fatura para ver o rateio detalhado por área.</p>
+          </div>
+        </div>
+        <div class="faturas-lista" id="faturasList"></div>
+      </div>
+
+      <!-- Detalhe da fatura selecionada -->
+      <div class="card" id="cardDetalheFatura" style="display:none">
+        <div class="card-head">
+          <div>
+            <h2 id="detalheFaturaTitle">Detalhe da fatura</h2>
+            <p id="detalheFaturaDesc">—</p>
+          </div>
+          <button class="btn-action primary" id="btnRecalcular" style="white-space:nowrap">↺ Recalcular rateio</button>
+        </div>
+        <div class="table-wrap">
+          <table class="table" id="tableRateioDetalhe">
+            <thead>
+              <tr>
+                <th>Área</th>
+                <th>kWh</th>
+                <th>%</th>
+                <th>Valor (R$)</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+            <tfoot>
+              <tr>
+                <td><strong>Total</strong></td>
+                <td id="rTotalKwh">—</td>
+                <td>100%</td>
+                <td id="rTotalValor">—</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+        <div style="margin-top:12px">
+          <button class="btn-action" id="btnBaixarPdf">⬇ Baixar PDF do rateio</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ──────────────────────────────
+         PÁGINA: RATEIO POR ÁREA
+    ────────────────────────────── -->
+    <div class="page" id="page-rateio">
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <h2>Rateio por área</h2>
+            <p>Comparativo de consumo entre áreas nas últimas faturas.</p>
+          </div>
+          <label class="chip">
+            Fatura
+            <select id="selFaturaRateio"></select>
+          </label>
+        </div>
+        <div class="card-grid" style="margin-bottom:0">
+          <div class="chart-wrap" style="height:320px">
+            <canvas id="chartRateioArea"></canvas>
+          </div>
+          <div>
+            <div class="rateio-legend" id="rateioAreaLegend" style="margin-top:8px"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <h2>Tabela de rateio</h2>
+            <p>Detalhamento por área da fatura selecionada.</p>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="table" id="tableRateioArea">
+            <thead>
+              <tr><th>Área</th><th>kWh</th><th>%</th><th>Valor (R$)</th></tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- ──────────────────────────────
+         PÁGINA: METAS
+    ────────────────────────────── -->
+    <div class="page" id="page-metas">
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <h2>Metas de consumo</h2>
+            <p>Comparativo baseline vs meta cadastrada por local/quadro.</p>
+          </div>
+          <button class="btn-action primary" id="btnNovaMetaInfo" style="font-size:12px;padding:8px 12px">+ Nova meta via Swagger</button>
+        </div>
+        <div class="table-wrap">
+          <table class="table" id="tableMetas">
+            <thead>
+              <tr>
+                <th>Descrição</th>
+                <th>Baseline (kWh)</th>
+                <th>Meta (kWh)</th>
+                <th>Início</th>
+                <th>Fim</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Gráfico de metas -->
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <h2>Baseline vs Meta</h2>
+            <p>Visualização comparativa das metas cadastradas.</p>
+          </div>
+        </div>
+        <div class="chart-wrap">
+          <canvas id="chartMetas"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <footer style="padding:0 24px 20px;font-size:12px;color:rgba(234,240,255,.35)">
+      Safe Energy • Financeiro
+    </footer>
   </div>
+</div>
 
-  <script src="financeiro.js"></script>
+<script>
+/* ── Navegação ── */
+const PAGE_TITLES = {
+  "visao-geral": "Visão Geral",
+  "faturas":     "Faturas",
+  "rateio":      "Rateio por Área",
+  "metas":       "Metas"
+};
+
+function navegarPara(pageId) {
+  document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
+  document.querySelectorAll(".nav-item").forEach(b => b.classList.remove("active"));
+  const page = document.getElementById("page-" + pageId);
+  if (page) page.classList.add("active");
+  const btn = document.querySelector(`.nav-item[data-page="${pageId}"]`);
+  if (btn) btn.classList.add("active");
+  const title = document.getElementById("pageTitle");
+  if (title) title.textContent = PAGE_TITLES[pageId] || pageId;
+  fecharSidebar();
+}
+
+document.querySelectorAll(".nav-item").forEach(btn => {
+  btn.addEventListener("click", () => navegarPara(btn.dataset.page));
+});
+
+function abrirSidebar()  { document.getElementById("sidenav").classList.add("open"); document.getElementById("navOverlay").classList.add("open"); }
+function fecharSidebar() { document.getElementById("sidenav").classList.remove("open"); document.getElementById("navOverlay").classList.remove("open"); }
+
+document.getElementById("btnMenu").addEventListener("click", abrirSidebar);
+document.getElementById("navOverlay").addEventListener("click", fecharSidebar);
+</script>
+
+<script src="financeiro.js"></script>
 </body>
 </html>
