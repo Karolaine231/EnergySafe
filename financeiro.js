@@ -1,599 +1,598 @@
 /* ============================================================
    Safe Energy • Financeiro — financeiro.js
-   Integração completa com a API: https://backendsafe.onrender.com
+   APIs usadas:
+   - GET /locais/
+   - GET /areas/
+   - GET /faturas/
+   - GET /faturas/{id}/rateio
+   - POST /faturas/{id}/recalcular
+   - GET /relatorios/rateio/{fatura_id}
+   - GET /metas/
    ============================================================ */
 
 const API = "https://backendsafe.onrender.com";
 
-async function apiFetch(path) {
-  const pathComBarra = path.includes("?")
-    ? path.replace("?", "/?")
-    : path + "/";
-  const res = await fetch(API + pathComBarra);
-  if (!res.ok) throw new Error(`Erro ${res.status} em ${path}`);
+/* ── Utilitários HTTP ── */
+async function apiFetch(path, opts = {}) {
+  const url = API + path;
+  const res = await fetch(url, {
+    headers: { Accept: "application/json" },
+    ...opts
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status} em ${path}`);
   return res.json();
 }
 
-// ── Referências DOM ──────────────────────────────────────────
-const selPeriodo    = document.getElementById("periodo");
-const selLocal      = document.getElementById("local");
-const selQuadro     = document.getElementById("quadro");
-const selCircuito   = document.getElementById("circuito");
-const customRange   = document.getElementById("customRange");
-const inputFrom     = document.getElementById("dateFrom");
-const inputTo       = document.getElementById("dateTo");
-const btnAplicar    = document.getElementById("btnAplicar");
-const btnExportCsv  = document.getElementById("btnExportCsv");
-const btnPrint      = document.getElementById("btnPrint");
-const tarifaInput   = document.getElementById("tarifa");
+function asArray(p) {
+  if (Array.isArray(p))          return p;
+  if (Array.isArray(p?.items))   return p.items;
+  if (Array.isArray(p?.results)) return p.results;
+  if (Array.isArray(p?.data))    return p.data;
+  return [];
+}
 
-// KPIs
-const kpiKwhPeriodo    = document.getElementById("kpiKwhPeriodo");
-const kpiKwhPeriodoSub = document.getElementById("kpiKwhPeriodoSub");
-const kpiCusto         = document.getElementById("kpiCusto");
-const kpiPico          = document.getElementById("kpiPico");
-const kpiReducao       = document.getElementById("kpiReducao");
-
-// Tabela
-const tbodyResumo = document.querySelector("#tableResumo tbody");
-const tTotalKwh   = document.getElementById("tTotalKwh");
-const tTotalCost  = document.getElementById("tTotalCost");
-
-// Alertas
-const alertsList = document.getElementById("alertsList");
-
-// Status
-const statusTag = document.getElementById("statusTag");
-const subtitle  = document.getElementById("subtitle");
-
-// ── Estado global ────────────────────────────────────────────
-let chartKwh    = null;
-let chartRateio = null;
-
-// Dados carregados para exportação
-let dadosExport = [];
-
-// ── Utilitários ──────────────────────────────────────────────
-
-/** Formata número pt-BR com casas decimais */
+/* ── Formatação ── */
 function fmt(n, casas = 2) {
-  return Number(n).toLocaleString("pt-BR", {
+  return Number(n || 0).toLocaleString("pt-BR", {
     minimumFractionDigits: casas,
-    maximumFractionDigits: casas,
+    maximumFractionDigits: casas
   });
 }
-
-/** Formata moeda R$ */
-function fmtBRL(n) {
-  return "R$ " + fmt(n, 2);
+function fmtBRL(n)  { return "R$ " + fmt(n, 2); }
+function fmtKwh(n)  { return fmt(n, 1) + " kWh"; }
+function fmtMes(s)  {
+  if (!s) return "—";
+  const d = new Date(s + "T12:00:00");
+  return d.toLocaleDateString("pt-BR", { month: "short", year: "numeric" });
 }
 
-/** Retorna { inicio, fim } em ISO 8601 conforme período selecionado */
-function getPeriodo() {
-  const tipo = selPeriodo.value;
-  const agora = new Date();
-  let inicio, fim;
-
-  if (tipo === "custom") {
-    inicio = new Date(inputFrom.value + "T00:00:00");
-    fim    = new Date(inputTo.value   + "T23:59:59");
-  } else if (tipo === "7d") {
-    fim    = new Date(agora);
-    inicio = new Date(agora);
-    inicio.setDate(inicio.getDate() - 7);
-  } else if (tipo === "mtd") {
-    inicio = new Date(agora.getFullYear(), agora.getMonth(), 1);
-    fim    = new Date(agora);
-  } else {
-    // 30d (padrão)
-    fim    = new Date(agora);
-    inicio = new Date(agora);
-    inicio.setDate(inicio.getDate() - 30);
-  }
-
-  return {
-    inicio: inicio.toISOString(),
-    fim:    fim.toISOString(),
-  };
-}
-
-/** Converte potência (W) para kWh considerando intervalo em horas */
-function wattsParaKwh(medicoes) {
-  if (!medicoes || medicoes.length < 2) return 0;
-  let totalKwh = 0;
-  for (let i = 1; i < medicoes.length; i++) {
-    const dt = (new Date(medicoes[i].timestamp) - new Date(medicoes[i - 1].timestamp)) / 3_600_000; // horas
-    const wMedia = ((medicoes[i].potencia || 0) + (medicoes[i - 1].potencia || 0)) / 2;
-    totalKwh += (wMedia / 1000) * dt;
-  }
-  return totalKwh;
-}
-
-/** Agrupa medições por dia (YYYY-MM-DD) → soma kWh */
-function agruparPorDia(medicoes) {
-  const mapa = {};
-  if (!medicoes || medicoes.length < 2) return mapa;
-
-  for (let i = 1; i < medicoes.length; i++) {
-    const dt = (new Date(medicoes[i].timestamp) - new Date(medicoes[i - 1].timestamp)) / 3_600_000;
-    const wMedia = ((medicoes[i].potencia || 0) + (medicoes[i - 1].potencia || 0)) / 2;
-    const kwh = (wMedia / 1000) * dt;
-    const dia = medicoes[i].timestamp.slice(0, 10);
-    mapa[dia] = (mapa[dia] || 0) + kwh;
-  }
-  return mapa;
-}
-
-/** Mostra/esconde indicador de status */
+/* ── UI helpers ── */
 function setStatus(msg, tipo = "ok") {
-  const dot = statusTag.querySelector(".dot");
-  dot.style.background = tipo === "ok" ? "#22c55e" : tipo === "warn" ? "#f59e0b" : "#ef4444";
-  statusTag.querySelector("span:last-child").textContent = msg;
+  const el  = document.getElementById("statusTag"); if (!el) return;
+  const dot = el.querySelector(".dot");
+  const txt = el.querySelector("span:last-child");
+  if (dot) dot.style.background = tipo === "ok" ? "#22c55e" : tipo === "warn" ? "#f59e0b" : "#ef4444";
+  if (txt) txt.textContent = msg;
 }
 
-// ── Fetch helpers ────────────────────────────────────────────
-
-// ── Inicialização dos selects ────────────────────────────────
-
-async function carregarLocais() {
-  selLocal.innerHTML = '<option value="">Carregando...</option>';
-  try {
-    const locais = await apiFetch("/locais");
-    selLocal.innerHTML = '<option value="">Todos os locais</option>' +
-      locais.map(l => `<option value="${l.id}">${l.nome}</option>`).join("");
-  } catch (e) {
-    selLocal.innerHTML = '<option value="">Erro ao carregar</option>';
-    console.error("carregarLocais:", e);
-  }
+function showFeedback(msg, tipo = "info") {
+  const b = document.getElementById("feedbackBox"); if (!b) return;
+  b.style.display = "block"; b.textContent = msg; b.className = "feedback-bar " + tipo;
+}
+function hideFeedback() {
+  const b = document.getElementById("feedbackBox"); if (!b) return;
+  b.style.display = "none"; b.textContent = ""; b.className = "feedback-bar";
 }
 
-async function carregarQuadros(localId) {
-  selQuadro.innerHTML   = '<option value="">Todos os quadros</option>';
-  selCircuito.innerHTML = '<option value="">Selecione um quadro</option>';
-  if (!localId) return;
-
-  selQuadro.innerHTML = '<option value="">Carregando...</option>';
-  try {
-    const quadros = await apiFetch(`/quadros?local_id=${localId}`);
-    selQuadro.innerHTML = '<option value="">Todos os quadros</option>' +
-      quadros.map(q => `<option value="${q.id}">${q.nome || "Quadro " + q.id}</option>`).join("");
-  } catch (e) {
-    selQuadro.innerHTML = '<option value="">Erro ao carregar</option>';
-    console.error("carregarQuadros:", e);
-  }
+function exportCsv(filename, rows) {
+  const csv  = rows.map(r => r.map(v => `"${String(v ?? "").replaceAll('"', '""')}"`).join(";")).join("\n");
+  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
 }
 
-async function carregarCanais(quadroId) {
-  selCircuito.innerHTML = '<option value="">Todos os circuitos</option>';
-  if (!quadroId) return;
+/* ── Estado global ── */
+const CORES = ["#10b981","#3b82f6","#f59e0b","#ef4444","#8b5cf6","#06b6d4","#f97316","#ec4899","#84cc16","#6366f1"];
 
-  selCircuito.innerHTML = '<option value="">Carregando...</option>';
-  try {
-    // Busca dispositivos do quadro, depois canais de cada dispositivo
-    const dispositivos = await apiFetch(`/dispositivos?quadro_id=${quadroId}`);
-    const canaisPromises = dispositivos.map(d => apiFetch(`/canais?dispositivo_id=${d.id}`));
-    const canaisArray = await Promise.all(canaisPromises);
-    const canais = canaisArray.flat();
+let charts = { evolucao: null, rateio: null, rateioArea: null, metas: null };
 
-    selCircuito.innerHTML = '<option value="">Todos os circuitos</option>' +
-      canais.map(c => {
-        const label = `Fase ${c.fase || "?"} • ${c.tipo || "canal"} (ID ${c.id})`;
-        return `<option value="${c.id}">${label}</option>`;
-      }).join("");
-  } catch (e) {
-    selCircuito.innerHTML = '<option value="">Erro ao carregar</option>';
-    console.error("carregarCanais:", e);
-  }
-}
+let locaisCache  = [];
+let areasCache   = [];
+let faturasCache = [];
+let metasCache   = [];
+let rateioCache  = {};    // { [fatura_id]: [...] }
+let faturaAtualId = null;
+let areasMapCache = {};   // { [area_id]: nome }
 
-// ── Carregamento principal de dados ─────────────────────────
-
-async function carregarDados() {
-  setStatus("Carregando...", "warn");
-  btnAplicar.disabled = true;
-  btnAplicar.textContent = "Carregando...";
-
-  const { inicio, fim } = getPeriodo();
-  const localId   = selLocal.value;
-  const quadroId  = selQuadro.value;
-  const canalId   = selCircuito.value;
-  const tarifa    = parseFloat(tarifaInput.value) || 0.95;
-
-  // Atualiza subtitle
-  const d1 = new Date(inicio).toLocaleDateString("pt-BR");
-  const d2 = new Date(fim).toLocaleDateString("pt-BR");
-  subtitle.textContent = `${d1} → ${d2}`;
+/* ── Carregamento inicial ── */
+async function inicializar() {
+  setStatus("Inicializando...", "warn");
+  hideFeedback();
 
   try {
-    // ── 1. Coleta de canais relevantes ───────────────────────
-    let canaisIds = [];
+    // Carrega tudo em paralelo
+    const [locais, areas, faturas, metas] = await Promise.all([
+      apiFetch("/locais/").then(asArray).catch(() => []),
+      apiFetch("/areas/").then(asArray).catch(() => []),
+      apiFetch("/faturas/").then(asArray).catch(() => []),
+      apiFetch("/metas/").then(asArray).catch(() => [])
+    ]);
 
-    if (canalId) {
-      canaisIds = [parseInt(canalId)];
-    } else if (quadroId) {
-      const dispositivos = await apiFetch(`/dispositivos?quadro_id=${quadroId}`);
-      const canaisArr = await Promise.all(dispositivos.map(d => apiFetch(`/canais?dispositivo_id=${d.id}`)));
-      canaisIds = canaisArr.flat().map(c => c.id);
-    } else if (localId) {
-      const quadros = await apiFetch(`/quadros?local_id=${localId}`);
-      for (const q of quadros) {
-        const dispositivos = await apiFetch(`/dispositivos?quadro_id=${q.id}`);
-        const canaisArr = await Promise.all(dispositivos.map(d => apiFetch(`/canais?dispositivo_id=${d.id}`)));
-        canaisIds.push(...canaisArr.flat().map(c => c.id));
-      }
-    } else {
-      // Tudo: busca todos locais → quadros → canais
-      const locais = await apiFetch("/locais");
-      for (const loc of locais) {
-        const quadros = await apiFetch(`/quadros?local_id=${loc.id}`);
-        for (const q of quadros) {
-          const dispositivos = await apiFetch(`/dispositivos?quadro_id=${q.id}`);
-          const canaisArr = await Promise.all(dispositivos.map(d => apiFetch(`/canais?dispositivo_id=${d.id}`)));
-          canaisIds.push(...canaisArr.flat().map(c => c.id));
-        }
-      }
+    locaisCache  = locais;
+    areasCache   = areas;
+    faturasCache = faturas.sort((a, b) => a.mes.localeCompare(b.mes)); // ordem cronológica
+    metasCache   = metas;
+
+    // Mapa de áreas para lookup rápido
+    areasMapCache = {};
+    areas.forEach(a => { areasMapCache[a.id] = a.nome || `Área ${a.id}`; });
+
+    // Preenche selects
+    preencherLocais();
+    preencherAreas("");
+    preencherSelFaturas();
+
+    // Renderiza tudo
+    renderKPIs();
+    renderGraficoEvolucao();
+    renderTabelaResumo();
+    renderFaturasList();
+    renderMetas();
+
+    // Carrega rateio da fatura mais recente para o gráfico de visão geral
+    if (faturasCache.length > 0) {
+      const ultima = faturasCache[faturasCache.length - 1];
+      await carregarRateio(ultima.id);
+      renderRateioVisaoGeral(ultima.id);
     }
-
-    // Remove duplicatas
-    canaisIds = [...new Set(canaisIds)];
-
-    if (canaisIds.length === 0) {
-      mostrarVazio();
-      setStatus("Sem dados", "warn");
-      return;
-    }
-
-    // ── 2. Busca medições de todos os canais ─────────────────
-    const medicoesPorCanal = {};
-    await Promise.all(canaisIds.map(async (id) => {
-      const url = `/medicoes?canal_id=${id}&inicio=${encodeURIComponent(inicio)}&fim=${encodeURIComponent(fim)}&valido=true`;
-      try {
-        medicoesPorCanal[id] = await apiFetch(url);
-      } catch {
-        medicoesPorCanal[id] = [];
-      }
-    }));
-
-    // ── 3. Busca alertas do período ──────────────────────────
-    let alertas = [];
-    try {
-      // Tenta buscar alertas dos canais relevantes
-      const alertasArr = await Promise.all(
-        canaisIds.slice(0, 10).map(id => apiFetch(`/alertas?canal_id=${id}&resolvido=false`))
-      );
-      alertas = alertasArr.flat();
-    } catch { /* alertas opcionais */ }
-
-    // ── 4. Processa dados ────────────────────────────────────
-    processarEExibir(medicoesPorCanal, alertas, tarifa, inicio, fim, canaisIds);
 
     setStatus("Atualizado agora", "ok");
   } catch (e) {
-    console.error("carregarDados:", e);
-    setStatus("Erro ao carregar", "error");
-  } finally {
-    btnAplicar.disabled = false;
-    btnAplicar.textContent = "Aplicar filtros";
+    console.error("inicializar:", e);
+    showFeedback("Erro ao carregar dados: " + e.message, "error");
+    setStatus("Erro", "error");
   }
 }
 
-// ── Processamento e exibição ─────────────────────────────────
+/* ── Selects ── */
+function preencherLocais() {
+  const sel = document.getElementById("local"); if (!sel) return;
+  sel.innerHTML = `<option value="">Todos os locais</option>` +
+    locaisCache.map(l => `<option value="${l.id}">${l.nome}</option>`).join("");
+}
 
-function processarEExibir(medicoesPorCanal, alertas, tarifa, inicio, fim, canaisIds) {
-  const canais = Object.keys(medicoesPorCanal);
-  if (canais.length === 0) { mostrarVazio(); return; }
+function preencherAreas(localId = "") {
+  const sel = document.getElementById("area"); if (!sel) return;
+  const lista = localId
+    ? areasCache.filter(a => String(a.local_id) === String(localId))
+    : areasCache;
+  sel.innerHTML = `<option value="">Todas as áreas</option>` +
+    lista.map(a => `<option value="${a.id}">${a.nome}</option>`).join("");
+}
 
-  // Agrega todas as medições para KPIs globais
-  const todasMedicoes = Object.values(medicoesPorCanal).flat();
-  todasMedicoes.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+function preencherSelFaturas() {
+  const sel = document.getElementById("selFaturaRateio"); if (!sel) return;
+  sel.innerHTML = faturasCache.map(f =>
+    `<option value="${f.id}">${fmtMes(f.mes)} — ${f.descricao?.slice(0, 30) || "Fatura"}</option>`
+  ).join("");
+  if (faturasCache.length > 0) sel.value = faturasCache[faturasCache.length - 1].id;
+}
 
-  // Pico de potência
-  const pico = Math.max(...todasMedicoes.map(m => m.potencia || 0), 0);
+/* ── KPIs ── */
+function renderKPIs() {
+  // Filtra por local se selecionado
+  const localId = document.getElementById("local")?.value || "";
+  const faturas = localId
+    ? faturasCache.filter(f => String(f.local_id) === String(localId))
+    : faturasCache;
 
-  // kWh total (por canal e soma)
-  const kwhPorCanal = {};
-  let kwhTotal = 0;
-  for (const [id, meds] of Object.entries(medicoesPorCanal)) {
-    const k = wattsParaKwh(meds);
-    kwhPorCanal[id] = k;
-    kwhTotal += k;
+  const totalKwh   = faturas.reduce((s, f) => s + Number(f.kwh_total  || 0), 0);
+  const totalCusto = faturas.reduce((s, f) => s + Number(f.valor_total|| 0), 0);
+  const tarifa     = totalKwh > 0 ? totalCusto / totalKwh : 0;
+
+  document.getElementById("kpiKwh").textContent     = fmtKwh(totalKwh);
+  document.getElementById("kpiKwhSub").textContent  = `${faturas.length} fatura(s)`;
+  document.getElementById("kpiCusto").textContent   = fmtBRL(totalCusto);
+  document.getElementById("kpiTarifa").textContent  = `R$ ${fmt(tarifa, 4)}`;
+  document.getElementById("kpiFaturas").textContent = faturas.length;
+}
+
+/* ── Gráfico evolução mensal ── */
+function renderGraficoEvolucao() {
+  const ctx = document.getElementById("chartEvolucao"); if (!ctx) return;
+  if (charts.evolucao) { charts.evolucao.destroy(); charts.evolucao = null; }
+
+  const localId = document.getElementById("local")?.value || "";
+  const modo    = document.getElementById("modoGrafico")?.value || "ambos";
+  const faturas = (localId
+    ? faturasCache.filter(f => String(f.local_id) === String(localId))
+    : faturasCache
+  ).sort((a, b) => a.mes.localeCompare(b.mes));
+
+  if (!faturas.length) return;
+
+  const labels = faturas.map(f => fmtMes(f.mes));
+  const datasets = [];
+
+  if (modo === "kwh" || modo === "ambos") {
+    datasets.push({
+      type: "bar",
+      label: "Consumo (kWh)",
+      data: faturas.map(f => Number(f.kwh_total || 0)),
+      backgroundColor: "rgba(56,189,248,0.28)",
+      borderColor: "#38bdf8",
+      borderWidth: 2,
+      borderRadius: 4,
+      yAxisID: "yKwh"
+    });
   }
 
-  const custoTotal = kwhTotal * tarifa;
+  if (modo === "custo" || modo === "ambos") {
+    datasets.push({
+      type: "line",
+      label: "Custo (R$)",
+      data: faturas.map(f => Number(f.valor_total || 0)),
+      borderColor: "#f59e0b",
+      backgroundColor: "rgba(245,158,11,0.08)",
+      borderWidth: 2,
+      pointRadius: 4,
+      tension: 0.3,
+      fill: false,
+      yAxisID: modo === "ambos" ? "yCusto" : "yKwh"
+    });
+  }
 
-  // Agrupa por dia (soma de todos canais)
-  const kwhPorDiaMapa = {};
-  for (const meds of Object.values(medicoesPorCanal)) {
-    const agrupado = agruparPorDia(meds);
-    for (const [dia, kwh] of Object.entries(agrupado)) {
-      kwhPorDiaMapa[dia] = (kwhPorDiaMapa[dia] || 0) + kwh;
+  const scales = {
+    x: { ticks: { color: "rgba(234,240,255,.65)", maxRotation: 0 }, grid: { color: "rgba(255,255,255,.06)" } }
+  };
+
+  if (modo === "ambos") {
+    scales.yKwh  = { position: "left",  beginAtZero: true, ticks: { color: "rgba(234,240,255,.65)" }, grid: { color: "rgba(255,255,255,.06)" }, title: { display: true, text: "kWh", color: "#38bdf8" } };
+    scales.yCusto= { position: "right", beginAtZero: true, ticks: { color: "rgba(234,240,255,.65)" }, grid: { drawOnChartArea: false }, title: { display: true, text: "R$", color: "#f59e0b" } };
+  } else {
+    scales.yKwh  = { beginAtZero: true, ticks: { color: "rgba(234,240,255,.65)" }, grid: { color: "rgba(255,255,255,.06)" } };
+  }
+
+  charts.evolucao = new Chart(ctx, {
+    data: { labels, datasets },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { display: true, labels: { color: "rgba(234,240,255,.8)", boxWidth: 12 } },
+        tooltip: {
+          callbacks: {
+            label: c => c.dataset.yAxisID === "yCusto" || c.dataset.label?.includes("Custo")
+              ? ` ${c.dataset.label}: ${fmtBRL(c.parsed.y)}`
+              : ` ${c.dataset.label}: ${fmtKwh(c.parsed.y)}`
+          }
+        }
+      },
+      scales
     }
-  }
-  const diasOrdenados = Object.keys(kwhPorDiaMapa).sort();
-  const valoresDia    = diasOrdenados.map(d => kwhPorDiaMapa[d]);
-
-  // Indicador de redução (compara primeira vs última metade do período)
-  let reducaoText = "—";
-  if (diasOrdenados.length >= 4) {
-    const meio   = Math.floor(diasOrdenados.length / 2);
-    const antes  = valoresDia.slice(0, meio).reduce((a, b) => a + b, 0);
-    const depois = valoresDia.slice(meio).reduce((a, b) => a + b, 0);
-    if (antes > 0) {
-      const diff = ((depois - antes) / antes) * 100;
-      reducaoText = (diff <= 0 ? "↓ " : "↑ +") + fmt(Math.abs(diff), 1) + "%";
-    }
-  }
-
-  // ── Atualiza KPIs ──────────────────────────────────────────
-  kpiKwhPeriodo.textContent    = fmt(kwhTotal, 1) + " kWh";
-  kpiKwhPeriodoSub.textContent = diasOrdenados.length + " dias analisados";
-  kpiCusto.textContent         = fmtBRL(custoTotal);
-  kpiPico.textContent          = fmt(pico, 0) + " W";
-  kpiReducao.textContent       = reducaoText;
-
-  // ── Gráfico de consumo diário ──────────────────────────────
-  const labelsDia = diasOrdenados.map(d => {
-    const [, m, dia] = d.split("-");
-    return `${dia}/${m}`;
   });
+}
 
-  renderChartKwh(labelsDia, valoresDia, tarifa);
+/* ── Tabela resumo ── */
+function renderTabelaResumo() {
+  const tbody = document.querySelector("#tableResumo tbody"); if (!tbody) return;
+  const localId = document.getElementById("local")?.value || "";
+  const faturas = (localId
+    ? faturasCache.filter(f => String(f.local_id) === String(localId))
+    : faturasCache
+  ).sort((a, b) => b.mes.localeCompare(a.mes)); // mais recente primeiro
 
-  // ── Rateio por canal ───────────────────────────────────────
-  // Tenta nomear canais (usa ID como fallback)
-  const labelsRateio = canais.map(id => `Canal ${id}`);
-  const valoresRateio = canais.map(id => kwhPorCanal[id]);
+  tbody.innerHTML = "";
+  let totalKwh = 0, totalCusto = 0;
 
-  renderChartRateio(labelsRateio, valoresRateio, kwhTotal);
-
-  // ── Tabela resumo ──────────────────────────────────────────
-  dadosExport = [];
-  tbodyResumo.innerHTML = "";
-
-  canais.forEach((id, i) => {
-    const kwh  = kwhPorCanal[id];
-    const pct  = kwhTotal > 0 ? (kwh / kwhTotal) * 100 : 0;
-    const custo = kwh * tarifa;
-
-    dadosExport.push({ area: labelsRateio[i], kwh, pct, custo });
+  faturas.forEach(f => {
+    const kwh   = Number(f.kwh_total   || 0);
+    const custo = Number(f.valor_total || 0);
+    const tarifa = kwh > 0 ? custo / kwh : 0;
+    totalKwh   += kwh;
+    totalCusto += custo;
 
     const tr = document.createElement("tr");
     tr.innerHTML = `
-      <td>${labelsRateio[i]}</td>
-      <td>${fmt(kwh, 2)}</td>
-      <td>${fmt(pct, 1)}%</td>
+      <td>${fmtMes(f.mes)}</td>
+      <td>${fmtKwh(kwh)}</td>
       <td>${fmtBRL(custo)}</td>
+      <td>R$ ${fmt(tarifa, 4)}</td>
     `;
-    tbodyResumo.appendChild(tr);
+    tbody.appendChild(tr);
   });
 
-  tTotalKwh.textContent  = fmt(kwhTotal, 2);
-  tTotalCost.textContent = fmtBRL(custoTotal);
-
-  // ── Alertas ────────────────────────────────────────────────
-  renderAlertas(alertas);
+  const tarMediaGeral = totalKwh > 0 ? totalCusto / totalKwh : 0;
+  document.getElementById("tTotalKwh").textContent   = fmtKwh(totalKwh);
+  document.getElementById("tTotalCost").textContent  = fmtBRL(totalCusto);
+  document.getElementById("tTotalTarifa").textContent= `R$ ${fmt(tarMediaGeral, 4)}`;
 }
 
-function mostrarVazio() {
-  kpiKwhPeriodo.textContent = "—";
-  kpiCusto.textContent      = "—";
-  kpiPico.textContent       = "—";
-  kpiReducao.textContent    = "—";
-  tbodyResumo.innerHTML     = '<tr><td colspan="4" style="text-align:center;color:var(--color-text-tertiary,#888)">Sem dados para o período</td></tr>';
-  alertsList.innerHTML      = '<li style="color:var(--color-text-tertiary,#888)">Nenhum alerta encontrado</li>';
-  if (chartKwh)    { chartKwh.data.labels = []; chartKwh.data.datasets[0].data = []; chartKwh.update(); }
-  if (chartRateio) { chartRateio.data.labels = []; chartRateio.data.datasets[0].data = []; chartRateio.update(); }
+/* ── Rateio (cache) ── */
+async function carregarRateio(faturaId) {
+  if (rateioCache[faturaId]) return rateioCache[faturaId];
+  try {
+    const dados = asArray(await apiFetch(`/faturas/${faturaId}/rateio/`));
+    rateioCache[faturaId] = dados;
+    return dados;
+  } catch { return []; }
 }
 
-// ── Chart.js ─────────────────────────────────────────────────
+/* ── Gráfico de rateio (visão geral) ── */
+function renderRateioVisaoGeral(faturaId) {
+  const dados = rateioCache[faturaId] || [];
+  const ctx   = document.getElementById("chartRateio"); if (!ctx) return;
+  if (charts.rateio) { charts.rateio.destroy(); charts.rateio = null; }
 
-const CORES = [
-  "#10b981","#3b82f6","#f59e0b","#ef4444","#8b5cf6",
-  "#06b6d4","#f97316","#ec4899","#84cc16","#6366f1",
-];
+  const legend = document.getElementById("rateioLegend");
 
-function renderChartKwh(labels, valores, tarifa) {
-  const ctx = document.getElementById("chartKwh").getContext("2d");
+  if (!dados.length || dados.every(d => !d.kwh)) {
+    if (legend) legend.innerHTML = `<p style="font-size:12px;color:var(--muted)">Rateio ainda não calculado. Acesse a aba Faturas e clique em "Recalcular rateio".</p>`;
+    return;
+  }
 
-  if (chartKwh) chartKwh.destroy();
+  const labels = dados.map(d => areasMapCache[d.area_id] || `Área ${d.area_id}`);
+  const values = dados.map(d => Number(d.kwh || 0));
+  const cores  = labels.map((_, i) => CORES[i % CORES.length]);
 
-  chartKwh = new Chart(ctx, {
-    type: "bar",
-    data: {
-      labels,
-      datasets: [
-        {
-          label: "kWh",
-          data: valores,
-          backgroundColor: "rgba(16,185,129,0.25)",
-          borderColor: "#10b981",
-          borderWidth: 2,
-          borderRadius: 4,
-          yAxisID: "yKwh",
-        },
-        {
-          label: "Custo (R$)",
-          data: valores.map(v => +(v * tarifa).toFixed(2)),
-          type: "line",
-          borderColor: "#f59e0b",
-          backgroundColor: "rgba(245,158,11,0.08)",
-          borderWidth: 2,
-          pointRadius: 3,
-          tension: 0.4,
-          yAxisID: "yCusto",
-        },
-      ],
-    },
-    options: {
-      responsive: true,
-      maintainAspectRatio: true,
-      interaction: { mode: "index", intersect: false },
-      plugins: {
-        legend: { position: "top" },
-        tooltip: {
-          callbacks: {
-            label: ctx => {
-              if (ctx.dataset.yAxisID === "yCusto")
-                return " " + fmtBRL(ctx.parsed.y);
-              return " " + fmt(ctx.parsed.y, 2) + " kWh";
-            },
-          },
-        },
-      },
-      scales: {
-        yKwh: {
-          position: "left",
-          title: { display: true, text: "kWh" },
-          beginAtZero: true,
-        },
-        yCusto: {
-          position: "right",
-          title: { display: true, text: "R$" },
-          beginAtZero: true,
-          grid: { drawOnChartArea: false },
-        },
-      },
-    },
-  });
-}
-
-function renderChartRateio(labels, valores, total) {
-  const ctx = document.getElementById("chartRateio").getContext("2d");
-  if (chartRateio) chartRateio.destroy();
-
-  const cores = labels.map((_, i) => CORES[i % CORES.length]);
-
-  chartRateio = new Chart(ctx, {
+  charts.rateio = new Chart(ctx, {
     type: "doughnut",
-    data: {
-      labels,
-      datasets: [{
-        data: valores,
-        backgroundColor: cores,
-        borderColor: "transparent",
-        hoverOffset: 6,
-      }],
-    },
+    data: { labels, datasets: [{ data: values, backgroundColor: cores, borderColor: "transparent", hoverOffset: 6 }] },
     options: {
-      responsive: true,
-      maintainAspectRatio: true,
-      cutout: "68%",
+      responsive: true, maintainAspectRatio: false, cutout: "68%",
       plugins: {
         legend: { display: false },
-        tooltip: {
-          callbacks: {
-            label: ctx => {
-              const pct = total > 0 ? ((ctx.parsed / total) * 100).toFixed(1) : 0;
-              return ` ${fmt(ctx.parsed, 2)} kWh (${pct}%)`;
-            },
-          },
-        },
-      },
-    },
+        tooltip: { callbacks: { label: c => ` ${c.label}: ${fmtKwh(c.parsed)} (${Number(dados[c.dataIndex]?.percentual || 0).toFixed(1)}%)` } }
+      }
+    }
   });
 
-  // Legenda customizada
-  const legend = document.getElementById("rateioLegend");
-  legend.innerHTML = labels.map((l, i) => {
-    const pct = total > 0 ? ((valores[i] / total) * 100).toFixed(1) : 0;
-    return `
-      <div class="leg-item" style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:13px">
-        <span style="width:12px;height:12px;border-radius:3px;background:${cores[i]};flex-shrink:0"></span>
+  if (legend) {
+    legend.innerHTML = labels.map((l, i) => `
+      <div class="leg-item">
+        <span class="leg-swatch" style="background:${cores[i]}"></span>
         <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${l}</span>
-        <span style="font-weight:500">${pct}%</span>
+        <span style="font-weight:600">${Number(dados[i]?.percentual || 0).toFixed(1)}%</span>
+      </div>`).join("");
+  }
+}
+
+/* ── Lista de faturas ── */
+function renderFaturasList() {
+  const el = document.getElementById("faturasList"); if (!el) return;
+  const localId = document.getElementById("local")?.value || "";
+  const faturas = (localId
+    ? faturasCache.filter(f => String(f.local_id) === String(localId))
+    : faturasCache
+  ).sort((a, b) => b.mes.localeCompare(a.mes));
+
+  if (!faturas.length) {
+    el.innerHTML = `<p style="color:var(--muted);font-size:13px">Nenhuma fatura encontrada.</p>`;
+    return;
+  }
+
+  el.innerHTML = faturas.map(f => {
+    const kwh    = Number(f.kwh_total   || 0);
+    const custo  = Number(f.valor_total || 0);
+    const tarifa = kwh > 0 ? custo / kwh : 0;
+    return `
+      <div class="fatura-card" data-id="${f.id}" onclick="selecionarFatura(${f.id})">
+        <h3>${fmtMes(f.mes)} — ${f.descricao || "Fatura"}</h3>
+        <div class="fatura-meta">
+          <span>🔋 <strong>${fmtKwh(kwh)}</strong></span>
+          <span>💰 <strong>${fmtBRL(custo)}</strong></span>
+          <span>📊 <strong>R$ ${fmt(tarifa, 4)}/kWh</strong></span>
+        </div>
       </div>`;
   }).join("");
 }
 
-function renderAlertas(alertas) {
-  alertsList.innerHTML = "";
+async function selecionarFatura(faturaId) {
+  faturaAtualId = faturaId;
 
-  if (!alertas || alertas.length === 0) {
-    alertsList.innerHTML = '<li style="color:var(--color-text-secondary,#666);padding:8px 0">✓ Nenhum alerta ativo no período</li>';
-    return;
-  }
-
-  const icones = {
-    sobrecorrente:      { ico: "⚡", cor: "#ef4444" },
-    consumo_fora_horario: { ico: "🌙", cor: "#f59e0b" },
-    queda_brusca:       { ico: "📉", cor: "#3b82f6" },
-  };
-
-  alertas.slice(0, 20).forEach(a => {
-    const info = icones[a.tipo] || { ico: "⚠", cor: "#888" };
-    const ts   = a.timestamp ? new Date(a.timestamp).toLocaleString("pt-BR") : "";
-    const li   = document.createElement("li");
-    li.style.cssText = `display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid rgba(0,0,0,0.06)`;
-    li.innerHTML = `
-      <span style="font-size:16px;flex-shrink:0">${info.ico}</span>
-      <div>
-        <div style="font-weight:500;color:${info.cor};font-size:13px">${a.tipo?.replace(/_/g," ") ?? "Alerta"} — Nível: ${a.nivel ?? "?"}</div>
-        <div style="font-size:12px;color:#666">Canal ${a.canal_id} • Valor: ${fmt(a.valor ?? 0,1)} • Limite: ${fmt(a.limite ?? 0,1)}</div>
-        <div style="font-size:11px;color:#999">${ts}</div>
-      </div>`;
-    alertsList.appendChild(li);
+  // Destaca card selecionado
+  document.querySelectorAll(".fatura-card").forEach(c => {
+    c.classList.toggle("selected", String(c.dataset.id) === String(faturaId));
   });
 
-  if (alertas.length > 20) {
-    const mais = document.createElement("li");
-    mais.style.cssText = "font-size:12px;color:#888;padding:6px 0";
-    mais.textContent = `+ ${alertas.length - 20} alertas adicionais`;
-    alertsList.appendChild(mais);
-  }
+  const fatura = faturasCache.find(f => f.id === faturaId);
+  const cardDetalhe = document.getElementById("cardDetalheFatura");
+  cardDetalhe.style.display = "block";
+
+  document.getElementById("detalheFaturaTitle").textContent = `Fatura: ${fmtMes(fatura?.mes)}`;
+  document.getElementById("detalheFaturaDesc").textContent  = fatura?.descricao || "—";
+
+  setStatus("Carregando rateio...", "warn");
+  const dados = await carregarRateio(faturaId);
+  renderTabelaRateioDetalhe(dados, fatura);
+  setStatus("Atualizado agora", "ok");
 }
 
-// ── Exportação CSV ───────────────────────────────────────────
+function renderTabelaRateioDetalhe(dados, fatura) {
+  const tbody = document.querySelector("#tableRateioDetalhe tbody"); if (!tbody) return;
+  tbody.innerHTML = "";
 
-function exportarCSV() {
-  if (dadosExport.length === 0) {
-    alert("Nenhum dado para exportar. Aplique os filtros primeiro.");
+  if (!dados.length || dados.every(d => !d.kwh)) {
+    tbody.innerHTML = `<tr><td colspan="4" style="text-align:center;color:var(--muted)">Rateio vazio. Clique em "Recalcular rateio".</td></tr>`;
+    document.getElementById("rTotalKwh").textContent   = "—";
+    document.getElementById("rTotalValor").textContent = "—";
     return;
   }
 
-  const { inicio, fim } = getPeriodo();
-  const linhas = [
-    ["Área", "kWh (período)", "% do total", "Custo estimado (R$)"],
-    ...dadosExport.map(r => [
-      r.area,
-      r.kwh.toFixed(3),
-      r.pct.toFixed(2) + "%",
-      r.custo.toFixed(2),
-    ]),
-    [],
-    ["", "Total:", dadosExport.reduce((s, r) => s + r.kwh, 0).toFixed(3),
-          dadosExport.reduce((s, r) => s + r.custo, 0).toFixed(2)],
-    [],
-    [`Período: ${new Date(inicio).toLocaleDateString("pt-BR")} a ${new Date(fim).toLocaleDateString("pt-BR")}`],
-    [`Tarifa: R$ ${tarifaInput.value}/kWh`],
-    [`Gerado em: ${new Date().toLocaleString("pt-BR")}`],
-  ];
+  let totalKwh = 0, totalValor = 0;
+  dados.forEach(d => {
+    const kwh   = Number(d.kwh    || 0);
+    const valor = Number(d.valor_rs|| 0);
+    const pct   = Number(d.percentual || 0);
+    totalKwh   += kwh;
+    totalValor += valor;
 
-  const csv = linhas.map(l => l.join(";")).join("\n");
-  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
-  const url  = URL.createObjectURL(blob);
-  const a    = document.createElement("a");
-  a.href     = url;
-  a.download = `safe-energy-financeiro-${new Date().toISOString().slice(0,10)}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${areasMapCache[d.area_id] || `Área ${d.area_id}`}</td>
+      <td>${fmtKwh(kwh)}</td>
+      <td>${fmt(pct, 1)}%</td>
+      <td>${fmtBRL(valor)}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  document.getElementById("rTotalKwh").textContent   = fmtKwh(totalKwh);
+  document.getElementById("rTotalValor").textContent = fmtBRL(totalValor);
 }
 
-// ── Impressão ────────────────────────────────────────────────
+/* ── Página Rateio por Área ── */
+async function renderRateioAreaPage(faturaId) {
+  if (!faturaId && faturasCache.length) faturaId = faturasCache[faturasCache.length - 1].id;
+  if (!faturaId) return;
 
-function gerarResumoImpressao() {
-  const { inicio, fim } = getPeriodo();
-  const tarifa = parseFloat(tarifaInput.value) || 0.95;
+  const dados = await carregarRateio(faturaId);
 
-  const linhas = dadosExport.map(r => `
+  // Gráfico
+  const ctx = document.getElementById("chartRateioArea"); if (!ctx) return;
+  if (charts.rateioArea) { charts.rateioArea.destroy(); charts.rateioArea = null; }
+
+  const legend = document.getElementById("rateioAreaLegend");
+
+  if (!dados.length || dados.every(d => !d.kwh)) {
+    if (legend) legend.innerHTML = `<p style="font-size:12px;color:var(--muted)">Rateio ainda não calculado.</p>`;
+    return;
+  }
+
+  const labels = dados.map(d => areasMapCache[d.area_id] || `Área ${d.area_id}`);
+  const values = dados.map(d => Number(d.kwh || 0));
+  const cores  = labels.map((_, i) => CORES[i % CORES.length]);
+
+  charts.rateioArea = new Chart(ctx, {
+    type: "bar",
+    data: { labels, datasets: [{ label: "kWh", data: values, backgroundColor: cores, borderRadius: 6, borderWidth: 0 }] },
+    options: {
+      responsive: true, maintainAspectRatio: false, indexAxis: "y",
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: c => ` ${fmtKwh(c.parsed.x)}` } }
+      },
+      scales: {
+        x: { beginAtZero: true, ticks: { color: "rgba(234,240,255,.65)" }, grid: { color: "rgba(255,255,255,.06)" } },
+        y: { ticks: { color: "rgba(234,240,255,.75)" }, grid: { display: false } }
+      }
+    }
+  });
+
+  if (legend) {
+    legend.innerHTML = labels.map((l, i) => `
+      <div class="leg-item">
+        <span class="leg-swatch" style="background:${cores[i]}"></span>
+        <span style="flex:1">${l}</span>
+        <span style="font-weight:600">${Number(dados[i]?.percentual || 0).toFixed(1)}%</span>
+      </div>`).join("");
+  }
+
+  // Tabela
+  const tbody = document.querySelector("#tableRateioArea tbody"); if (!tbody) return;
+  tbody.innerHTML = "";
+  dados.forEach(d => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${areasMapCache[d.area_id] || `Área ${d.area_id}`}</td>
+      <td>${fmtKwh(Number(d.kwh || 0))}</td>
+      <td>${fmt(Number(d.percentual || 0), 1)}%</td>
+      <td>${fmtBRL(Number(d.valor_rs || 0))}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+/* ── Metas ── */
+function renderMetas() {
+  const tbody = document.querySelector("#tableMetas tbody"); if (!tbody) return;
+  tbody.innerHTML = "";
+
+  if (!metasCache.length) {
+    tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:var(--muted)">Nenhuma meta cadastrada. Use o Swagger para criar.</td></tr>`;
+    return;
+  }
+
+  metasCache.forEach(m => {
+    const baseline = Number(m.kwh_baseline || 0);
+    const meta     = Number(m.kwh_meta     || 0);
+    const hoje     = new Date();
+    const fim      = m.data_fim ? new Date(m.data_fim) : null;
+    const status   = !fim ? "Em aberto" : fim >= hoje ? "Ativa" : "Encerrada";
+    const statusCls= status === "Ativa" ? "ok" : status === "Encerrada" ? "warn" : "";
+
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${m.descricao || "—"}</td>
+      <td>${fmtKwh(baseline)}</td>
+      <td>${fmtKwh(meta)}</td>
+      <td>${m.data_inicio ? new Date(m.data_inicio + "T12:00:00").toLocaleDateString("pt-BR") : "—"}</td>
+      <td>${m.data_fim   ? new Date(m.data_fim    + "T12:00:00").toLocaleDateString("pt-BR") : "—"}</td>
+      <td><span class="tag ${statusCls}">${status}</span></td>
+    `;
+    tbody.appendChild(tr);
+  });
+
+  // Gráfico de metas
+  renderGraficoMetas();
+}
+
+function renderGraficoMetas() {
+  const ctx = document.getElementById("chartMetas"); if (!ctx) return;
+  if (charts.metas) { charts.metas.destroy(); charts.metas = null; }
+  if (!metasCache.length) return;
+
+  const labels    = metasCache.map(m => m.descricao || `Meta ${m.id}`);
+  const baselines = metasCache.map(m => Number(m.kwh_baseline || 0));
+  const metas     = metasCache.map(m => Number(m.kwh_meta     || 0));
+
+  charts.metas = new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels,
+      datasets: [
+        { label: "Baseline (kWh)", data: baselines, backgroundColor: "rgba(56,189,248,0.35)", borderColor: "#38bdf8", borderWidth: 2, borderRadius: 4 },
+        { label: "Meta (kWh)",     data: metas,     backgroundColor: "rgba(34,197,94,0.35)",  borderColor: "#22c55e", borderWidth: 2, borderRadius: 4 }
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: {
+        legend: { display: true, labels: { color: "rgba(234,240,255,.8)", boxWidth: 12 } },
+        tooltip: { callbacks: { label: c => ` ${c.dataset.label}: ${fmtKwh(c.parsed.y)}` } }
+      },
+      scales: {
+        x: { ticks: { color: "rgba(234,240,255,.65)" }, grid: { color: "rgba(255,255,255,.06)" } },
+        y: { beginAtZero: true, ticks: { color: "rgba(234,240,255,.65)" }, grid: { color: "rgba(255,255,255,.06)" } }
+      }
+    }
+  });
+}
+
+/* ── Exportação CSV ── */
+function exportarCSV() {
+  const localId = document.getElementById("local")?.value || "";
+  const faturas = (localId
+    ? faturasCache.filter(f => String(f.local_id) === String(localId))
+    : faturasCache
+  ).sort((a, b) => b.mes.localeCompare(a.mes));
+
+  if (!faturas.length) { alert("Nenhum dado para exportar."); return; }
+
+  const rows = [
+    ["Mês", "Descrição", "kWh Total", "Valor Total (R$)", "Tarifa R$/kWh"],
+    ...faturas.map(f => {
+      const kwh    = Number(f.kwh_total   || 0);
+      const custo  = Number(f.valor_total || 0);
+      const tarifa = kwh > 0 ? custo / kwh : 0;
+      return [fmtMes(f.mes), f.descricao || "—", kwh.toFixed(1), custo.toFixed(2), tarifa.toFixed(4)];
+    })
+  ];
+
+  exportCsv(`safe-energy-financeiro-${new Date().toISOString().slice(0, 10)}.csv`, rows);
+}
+
+/* ── Impressão / relatório ── */
+function gerarRelatorio() {
+  const localId  = document.getElementById("local")?.value || "";
+  const faturas  = (localId
+    ? faturasCache.filter(f => String(f.local_id) === String(localId))
+    : faturasCache
+  ).sort((a, b) => b.mes.localeCompare(a.mes));
+
+  const totalKwh   = faturas.reduce((s, f) => s + Number(f.kwh_total   || 0), 0);
+  const totalCusto = faturas.reduce((s, f) => s + Number(f.valor_total || 0), 0);
+
+  const linhas = faturas.map(f => `
     <tr>
-      <td>${r.area}</td>
-      <td>${fmt(r.kwh, 2)} kWh</td>
-      <td>${fmt(r.pct, 1)}%</td>
-      <td>${fmtBRL(r.custo)}</td>
+      <td>${fmtMes(f.mes)}</td>
+      <td>${fmtKwh(Number(f.kwh_total||0))}</td>
+      <td>${fmtBRL(Number(f.valor_total||0))}</td>
+      <td>R$ ${fmt(Number(f.kwh_total||0) > 0 ? Number(f.valor_total||0)/Number(f.kwh_total||0) : 0, 4)}</td>
     </tr>`).join("");
-
-  const totalKwh  = dadosExport.reduce((s, r) => s + r.kwh, 0);
-  const totalCost = dadosExport.reduce((s, r) => s + r.custo, 0);
 
   const janela = window.open("", "_blank");
   janela.document.write(`<!doctype html><html lang="pt-BR"><head>
@@ -603,92 +602,113 @@ function gerarResumoImpressao() {
       body { font-family: Arial, sans-serif; margin: 40px; color: #222; }
       h1 { font-size: 22px; margin-bottom: 4px; }
       .meta { color: #666; font-size: 13px; margin-bottom: 24px; }
+      .kpis { display: flex; gap: 20px; margin-bottom: 28px; }
+      .kpi { border: 1px solid #e5e7eb; border-radius: 8px; padding: 14px 18px; flex: 1; }
+      .kpi-label { font-size: 11px; color: #666; text-transform: uppercase; }
+      .kpi-value { font-size: 22px; font-weight: bold; margin-top: 4px; }
       table { width: 100%; border-collapse: collapse; font-size: 14px; }
       th { background: #f3f4f6; padding: 10px 12px; text-align: left; border-bottom: 2px solid #ddd; }
       td { padding: 9px 12px; border-bottom: 1px solid #eee; }
       tfoot td { font-weight: bold; background: #f9fafb; border-top: 2px solid #ddd; }
-      .kpis { display: flex; gap: 20px; margin-bottom: 28px; }
-      .kpi { border: 1px solid #e5e7eb; border-radius: 8px; padding: 14px 18px; flex: 1; }
-      .kpi-label { font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: .5px; }
-      .kpi-value { font-size: 24px; font-weight: bold; margin-top: 4px; }
       @media print { body { margin: 20px; } }
     </style>
   </head><body>
     <h1>Safe Energy • Relatório Financeiro</h1>
-    <div class="meta">
-      Período: ${new Date(inicio).toLocaleDateString("pt-BR")} a ${new Date(fim).toLocaleDateString("pt-BR")} &nbsp;|&nbsp;
-      Tarifa: R$ ${tarifa.toFixed(2)}/kWh &nbsp;|&nbsp;
-      Gerado em: ${new Date().toLocaleString("pt-BR")}
-    </div>
+    <div class="meta">Gerado em: ${new Date().toLocaleString("pt-BR")}</div>
     <div class="kpis">
-      <div class="kpi"><div class="kpi-label">Consumo total</div><div class="kpi-value">${fmt(totalKwh, 1)} kWh</div></div>
-      <div class="kpi"><div class="kpi-label">Custo estimado</div><div class="kpi-value">${fmtBRL(totalCost)}</div></div>
-      <div class="kpi"><div class="kpi-label">Pico registrado</div><div class="kpi-value">${kpiPico.textContent}</div></div>
-      <div class="kpi"><div class="kpi-label">Indicador de redução</div><div class="kpi-value">${kpiReducao.textContent}</div></div>
+      <div class="kpi"><div class="kpi-label">Consumo total</div><div class="kpi-value">${fmtKwh(totalKwh)}</div></div>
+      <div class="kpi"><div class="kpi-label">Custo total</div><div class="kpi-value">${fmtBRL(totalCusto)}</div></div>
+      <div class="kpi"><div class="kpi-label">Faturas</div><div class="kpi-value">${faturas.length}</div></div>
+      <div class="kpi"><div class="kpi-label">Tarifa média</div><div class="kpi-value">R$ ${fmt(totalKwh > 0 ? totalCusto / totalKwh : 0, 4)}</div></div>
     </div>
     <table>
-      <thead><tr><th>Área</th><th>kWh</th><th>%</th><th>Custo (R$)</th></tr></thead>
+      <thead><tr><th>Mês</th><th>kWh</th><th>Valor (R$)</th><th>R$/kWh</th></tr></thead>
       <tbody>${linhas || '<tr><td colspan="4">Sem dados</td></tr>'}</tbody>
-      <tfoot>
-        <tr>
-          <td>Total</td>
-          <td>${fmt(totalKwh, 2)} kWh</td>
-          <td>100%</td>
-          <td>${fmtBRL(totalCost)}</td>
-        </tr>
-      </tfoot>
+      <tfoot><tr><td>Total</td><td>${fmtKwh(totalKwh)}</td><td>${fmtBRL(totalCusto)}</td><td>—</td></tr></tfoot>
     </table>
     <script>window.onload = () => window.print();<\/script>
   </body></html>`);
   janela.document.close();
 }
 
-// ── Eventos ──────────────────────────────────────────────────
+/* ── Recalcular rateio ── */
+async function recalcularRateio() {
+  if (!faturaAtualId) return;
+  const btn = document.getElementById("btnRecalcular");
+  if (btn) { btn.disabled = true; btn.textContent = "Calculando..."; }
+  setStatus("Recalculando...", "warn");
 
-selPeriodo.addEventListener("change", () => {
-  customRange.style.display = selPeriodo.value === "custom" ? "flex" : "none";
-});
-
-selLocal.addEventListener("change", () => {
-  carregarQuadros(selLocal.value);
-});
-
-selQuadro.addEventListener("change", () => {
-  carregarCanais(selQuadro.value);
-});
-
-tarifaInput.addEventListener("change", () => {
-  // Recalcula custo sem recarregar da API
-  const tarifa = parseFloat(tarifaInput.value) || 0.95;
-  if (dadosExport.length === 0) return;
-
-  const totalKwh  = dadosExport.reduce((s, r) => s + r.kwh, 0);
-  const totalCost = totalKwh * tarifa;
-
-  kpiCusto.textContent   = fmtBRL(totalCost);
-  tTotalCost.textContent = fmtBRL(totalCost);
-
-  // Atualiza tabela
-  const linhas = tbodyResumo.querySelectorAll("tr");
-  dadosExport.forEach((r, i) => {
-    r.custo = r.kwh * tarifa;
-    if (linhas[i]) linhas[i].cells[3].textContent = fmtBRL(r.custo);
-  });
-
-  // Atualiza linha do custo no gráfico de barras
-  if (chartKwh) {
-    chartKwh.data.datasets[1].data = chartKwh.data.datasets[0].data.map(v => +(v * tarifa).toFixed(2));
-    chartKwh.update();
+  try {
+    await apiFetch(`/faturas/${faturaAtualId}/recalcular/`, { method: "POST" });
+    delete rateioCache[faturaAtualId]; // limpa cache
+    const dados  = await carregarRateio(faturaAtualId);
+    const fatura = faturasCache.find(f => f.id === faturaAtualId);
+    renderTabelaRateioDetalhe(dados, fatura);
+    renderRateioVisaoGeral(faturaAtualId);
+    showFeedback("Rateio recalculado com sucesso!", "info");
+    setStatus("Atualizado agora", "ok");
+  } catch (e) {
+    showFeedback("Erro ao recalcular: " + e.message, "error");
+    setStatus("Erro", "error");
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "↺ Recalcular rateio"; }
   }
+}
+
+/* ── Baixar PDF ── */
+function baixarPdf() {
+  if (!faturaAtualId) return;
+  window.open(`${API}/relatorios/rateio/${faturaAtualId}/`, "_blank");
+}
+
+/* ── Eventos ── */
+document.getElementById("local")?.addEventListener("change", () => {
+  preencherAreas(document.getElementById("local").value);
+  renderKPIs();
+  renderGraficoEvolucao();
+  renderTabelaResumo();
+  renderFaturasList();
 });
 
-btnAplicar.addEventListener("click", carregarDados);
-btnExportCsv.addEventListener("click", exportarCSV);
-btnPrint.addEventListener("click", gerarResumoImpressao);
+document.getElementById("area")?.addEventListener("change", () => {
+  // Filtro de área afeta rateio — não faturas diretamente
+});
 
-// ── Boot ─────────────────────────────────────────────────────
+document.getElementById("modoGrafico")?.addEventListener("change", renderGraficoEvolucao);
 
+document.getElementById("selFaturaRateio")?.addEventListener("change", e => {
+  renderRateioAreaPage(Number(e.target.value));
+});
+
+document.getElementById("btnAplicar")?.addEventListener("click", () => {
+  renderKPIs();
+  renderGraficoEvolucao();
+  renderTabelaResumo();
+  renderFaturasList();
+});
+
+document.getElementById("btnRefresh")?.addEventListener("click", inicializar);
+document.getElementById("btnExportCsv")?.addEventListener("click", exportarCSV);
+document.getElementById("btnPrint")?.addEventListener("click", gerarRelatorio);
+document.getElementById("btnRecalcular")?.addEventListener("click", recalcularRateio);
+document.getElementById("btnBaixarPdf")?.addEventListener("click", baixarPdf);
+
+document.getElementById("btnNovaMetaInfo")?.addEventListener("click", () => {
+  window.open(`${API}/docs#/Metas/criar_meta_metas__post`, "_blank");
+});
+
+/* ── Navegação: carregar dados da página ao trocar ── */
+document.querySelectorAll(".nav-item").forEach(btn => {
+  btn.addEventListener("click", () => {
+    const page = btn.dataset.page;
+    if (page === "rateio") {
+      const sel = document.getElementById("selFaturaRateio");
+      renderRateioAreaPage(sel ? Number(sel.value) : null);
+    }
+  });
+});
+
+/* ── Boot ── */
 (async () => {
-  await carregarLocais();
-  await carregarDados();
+  await inicializar();
 })();
