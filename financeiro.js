@@ -120,10 +120,22 @@ async function inicializar() {
     renderFaturasList();
     renderMetas();
 
-    // Carrega rateio da fatura mais recente para o gráfico de visão geral
+    // Carrega rateio da fatura mais recente automaticamente
     if (faturasCache.length > 0) {
       const ultima = faturasCache[faturasCache.length - 1];
-      await carregarRateio(ultima.id);
+      let dados = await carregarRateio(ultima.id);
+
+      // Se rateio vazio ou zerado, recalcula automaticamente
+      if (!dados.length || dados.every(d => !d.kwh)) {
+        try {
+          await apiFetch(`/faturas/${ultima.id}/recalcular/`, { method: "POST" });
+          delete rateioCache[ultima.id];
+          dados = await carregarRateio(ultima.id);
+        } catch(e) {
+          console.warn("Recalcular automático falhou:", e);
+        }
+      }
+
       renderRateioVisaoGeral(ultima.id);
     }
 
