@@ -79,7 +79,7 @@ const CORES = ["#10b981","#3b82f6","#f59e0b","#ef4444","#8b5cf6","#06b6d4","#f97
 
 let charts = { evolucao: null, rateio: null, rateioArea: null, metas: null };
 
-let locaisCache  = [];
+let locaisCache  = []; // mantido para referência mas não usado em filtros
 let areasCache   = [];
 let faturasCache = [];
 let metasCache   = [];
@@ -110,9 +110,7 @@ async function inicializar() {
     areasMapCache = {};
     areas.forEach(a => { areasMapCache[a.id] = a.nome || `Área ${a.id}`; });
 
-    // Preenche selects
-    preencherLocais();
-    preencherAreas("");
+    // Preenche select de faturas
     preencherSelFaturas();
 
     // Renderiza tudo
@@ -138,20 +136,7 @@ async function inicializar() {
 }
 
 /* ── Selects ── */
-function preencherLocais() {
-  const sel = document.getElementById("local"); if (!sel) return;
-  sel.innerHTML = `<option value="">Todos os locais</option>` +
-    locaisCache.map(l => `<option value="${l.id}">${l.nome}</option>`).join("");
-}
 
-function preencherAreas(localId = "") {
-  const sel = document.getElementById("area"); if (!sel) return;
-  const lista = localId
-    ? areasCache.filter(a => String(a.local_id) === String(localId))
-    : areasCache;
-  sel.innerHTML = `<option value="">Todas as áreas</option>` +
-    lista.map(a => `<option value="${a.id}">${a.nome}</option>`).join("");
-}
 
 function preencherSelFaturas() {
   const sel = document.getElementById("selFaturaRateio"); if (!sel) return;
@@ -163,11 +148,9 @@ function preencherSelFaturas() {
 
 /* ── KPIs ── */
 function renderKPIs() {
-  // Filtra por local se selecionado
-  const localId = document.getElementById("local")?.value || "";
-  const faturas = localId
-    ? faturasCache.filter(f => String(f.local_id) === String(localId))
-    : faturasCache;
+  // Faturas estão todas no local "Geral" (local_id:1)
+  // Filtro de local/área afeta rateio, não as faturas
+  const faturas = faturasCache;
 
   const totalKwh   = faturas.reduce((s, f) => s + Number(f.kwh_total  || 0), 0);
   const totalCusto = faturas.reduce((s, f) => s + Number(f.valor_total|| 0), 0);
@@ -185,12 +168,8 @@ function renderGraficoEvolucao() {
   const ctx = document.getElementById("chartEvolucao"); if (!ctx) return;
   if (charts.evolucao) { charts.evolucao.destroy(); charts.evolucao = null; }
 
-  const localId = document.getElementById("local")?.value || "";
   const modo    = document.getElementById("modoGrafico")?.value || "ambos";
-  const faturas = (localId
-    ? faturasCache.filter(f => String(f.local_id) === String(localId))
-    : faturasCache
-  ).sort((a, b) => a.mes.localeCompare(b.mes));
+  const faturas = [...faturasCache].sort((a, b) => a.mes.localeCompare(b.mes));
 
   if (!faturas.length) return;
 
@@ -259,11 +238,7 @@ function renderGraficoEvolucao() {
 /* ── Tabela resumo ── */
 function renderTabelaResumo() {
   const tbody = document.querySelector("#tableResumo tbody"); if (!tbody) return;
-  const localId = document.getElementById("local")?.value || "";
-  const faturas = (localId
-    ? faturasCache.filter(f => String(f.local_id) === String(localId))
-    : faturasCache
-  ).sort((a, b) => b.mes.localeCompare(a.mes)); // mais recente primeiro
+  const faturas = [...faturasCache].sort((a, b) => b.mes.localeCompare(a.mes));
 
   tbody.innerHTML = "";
   let totalKwh = 0, totalCusto = 0;
@@ -304,6 +279,10 @@ async function carregarRateio(faturaId) {
 /* ── Gráfico de rateio (visão geral) ── */
 function renderRateioVisaoGeral(faturaId) {
   const dados = rateioCache[faturaId] || [];
+  _renderRateioChart(faturaId, dados);
+}
+
+function _renderRateioChart(faturaId, dados) {
   const ctx   = document.getElementById("chartRateio"); if (!ctx) return;
   if (charts.rateio) { charts.rateio.destroy(); charts.rateio = null; }
 
@@ -314,6 +293,8 @@ function renderRateioVisaoGeral(faturaId) {
     return;
   }
 
+  // Recalcula percentual localmente caso os do banco estejam incorretos
+  const totalKwh = dados.reduce((s, d) => s + Number(d.kwh || 0), 0);
   const labels = dados.map(d => areasMapCache[d.area_id] || `Área ${d.area_id}`);
   const values = dados.map(d => Number(d.kwh || 0));
   const cores  = labels.map((_, i) => CORES[i % CORES.length]);
@@ -325,29 +306,28 @@ function renderRateioVisaoGeral(faturaId) {
       responsive: true, maintainAspectRatio: false, cutout: "68%",
       plugins: {
         legend: { display: false },
-        tooltip: { callbacks: { label: c => ` ${c.label}: ${fmtKwh(c.parsed)} (${Number(dados[c.dataIndex]?.percentual || 0).toFixed(1)}%)` } }
+        tooltip: { callbacks: { label: c => { const pct = totalKwh > 0 ? ((values[c.dataIndex] / totalKwh) * 100).toFixed(1) : 0; return ` ${c.label}: ${fmtKwh(c.parsed)} (${pct}%)`; } } }
       }
     }
   });
 
   if (legend) {
-    legend.innerHTML = labels.map((l, i) => `
+    legend.innerHTML = labels.map((l, i) => {
+      const pct = totalKwh > 0 ? ((values[i] / totalKwh) * 100).toFixed(1) : "0.0";
+      return `
       <div class="leg-item">
         <span class="leg-swatch" style="background:${cores[i]}"></span>
         <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${l}</span>
-        <span style="font-weight:600">${Number(dados[i]?.percentual || 0).toFixed(1)}%</span>
-      </div>`).join("");
+        <span style="font-weight:600">${pct}%</span>
+      </div>`;
+    }).join("");
   }
 }
 
 /* ── Lista de faturas ── */
 function renderFaturasList() {
   const el = document.getElementById("faturasList"); if (!el) return;
-  const localId = document.getElementById("local")?.value || "";
-  const faturas = (localId
-    ? faturasCache.filter(f => String(f.local_id) === String(localId))
-    : faturasCache
-  ).sort((a, b) => b.mes.localeCompare(a.mes));
+  const faturas = [...faturasCache].sort((a, b) => b.mes.localeCompare(a.mes));
 
   if (!faturas.length) {
     el.innerHTML = `<p style="color:var(--muted);font-size:13px">Nenhuma fatura encontrada.</p>`;
@@ -554,12 +534,7 @@ function renderGraficoMetas() {
 
 /* ── Exportação CSV ── */
 function exportarCSV() {
-  const localId = document.getElementById("local")?.value || "";
-  const faturas = (localId
-    ? faturasCache.filter(f => String(f.local_id) === String(localId))
-    : faturasCache
-  ).sort((a, b) => b.mes.localeCompare(a.mes));
-
+  const faturas = [...faturasCache].sort((a, b) => b.mes.localeCompare(a.mes));
   if (!faturas.length) { alert("Nenhum dado para exportar."); return; }
 
   const rows = [
@@ -577,11 +552,7 @@ function exportarCSV() {
 
 /* ── Impressão / relatório ── */
 function gerarRelatorio() {
-  const localId  = document.getElementById("local")?.value || "";
-  const faturas  = (localId
-    ? faturasCache.filter(f => String(f.local_id) === String(localId))
-    : faturasCache
-  ).sort((a, b) => b.mes.localeCompare(a.mes));
+  const faturas = [...faturasCache].sort((a, b) => b.mes.localeCompare(a.mes));
 
   const totalKwh   = faturas.reduce((s, f) => s + Number(f.kwh_total   || 0), 0);
   const totalCusto = faturas.reduce((s, f) => s + Number(f.valor_total || 0), 0);
@@ -662,17 +633,7 @@ function baixarPdf() {
 }
 
 /* ── Eventos ── */
-document.getElementById("local")?.addEventListener("change", () => {
-  preencherAreas(document.getElementById("local").value);
-  renderKPIs();
-  renderGraficoEvolucao();
-  renderTabelaResumo();
-  renderFaturasList();
-});
 
-document.getElementById("area")?.addEventListener("change", () => {
-  // Filtro de área afeta rateio — não faturas diretamente
-});
 
 document.getElementById("modoGrafico")?.addEventListener("change", renderGraficoEvolucao);
 
@@ -680,12 +641,7 @@ document.getElementById("selFaturaRateio")?.addEventListener("change", e => {
   renderRateioAreaPage(Number(e.target.value));
 });
 
-document.getElementById("btnAplicar")?.addEventListener("click", () => {
-  renderKPIs();
-  renderGraficoEvolucao();
-  renderTabelaResumo();
-  renderFaturasList();
-});
+
 
 document.getElementById("btnRefresh")?.addEventListener("click", inicializar);
 document.getElementById("btnExportCsv")?.addEventListener("click", exportarCSV);
