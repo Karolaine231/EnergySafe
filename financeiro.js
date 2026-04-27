@@ -544,22 +544,67 @@ function renderGraficoMetas() {
   });
 }
 
-/* ── Exportação CSV ── */
-function exportarCSV() {
-  const faturas = [...faturasCache].sort((a, b) => b.mes.localeCompare(a.mes));
-  if (!faturas.length) { alert("Nenhum dado para exportar."); return; }
+/* ── Exportação CSV — Rateio por área ── */
+async function exportarCSV() {
+  if (!faturasCache.length) { alert("Nenhum dado para exportar."); return; }
 
   const rows = [
-    ["Mês", "Descrição", "kWh Total", "Valor Total (R$)", "Tarifa R$/kWh"],
-    ...faturas.map(f => {
-      const kwh    = Number(f.kwh_total   || 0);
-      const custo  = Number(f.valor_total || 0);
-      const tarifa = kwh > 0 ? custo / kwh : 0;
-      return [fmtMes(f.mes), f.descricao || "—", kwh.toFixed(1), custo.toFixed(2), tarifa.toFixed(4)];
-    })
+    ["Fatura", "Mês", "Área", "kWh", "% do Total", "Valor (R$)", "Tarifa R$/kWh"]
   ];
 
-  exportCsv(`safe-energy-financeiro-${new Date().toISOString().slice(0, 10)}.csv`, rows);
+  // Exporta rateio de todas as faturas
+  for (const f of [...faturasCache].sort((a, b) => a.mes.localeCompare(b.mes))) {
+    let dados = rateioCache[f.id];
+    if (!dados) dados = await carregarRateio(f.id);
+
+    if (!dados.length || dados.every(d => !d.kwh)) {
+      // Sem rateio: exporta linha da fatura sem breakdown
+      rows.push([
+        f.descricao || "—",
+        fmtMes(f.mes),
+        "Sem rateio calculado",
+        Number(f.kwh_total   || 0).toFixed(1),
+        "100,00%",
+        Number(f.valor_total || 0).toFixed(2),
+        (Number(f.kwh_total||0) > 0 ? Number(f.valor_total||0)/Number(f.kwh_total||0) : 0).toFixed(4)
+      ]);
+      continue;
+    }
+
+    const totalKwh = dados.reduce((s, d) => s + Number(d.kwh || 0), 0);
+
+    dados.forEach(d => {
+      const kwh   = Number(d.kwh    || 0);
+      const valor = Number(d.valor_rs || 0);
+      const pct   = totalKwh > 0 ? (kwh / totalKwh) * 100 : 0;
+      const tarifa= kwh > 0 ? valor / kwh : 0;
+
+      rows.push([
+        f.descricao || "—",
+        fmtMes(f.mes),
+        areasMapCache[d.area_id] || `Área ${d.area_id}`,
+        kwh.toFixed(1),
+        pct.toFixed(2) + "%",
+        valor.toFixed(2),
+        tarifa.toFixed(4)
+      ]);
+    });
+
+    // Linha de subtotal da fatura
+    rows.push([
+      f.descricao || "—",
+      fmtMes(f.mes),
+      "TOTAL",
+      Number(f.kwh_total   || 0).toFixed(1),
+      "100,00%",
+      Number(f.valor_total || 0).toFixed(2),
+      (Number(f.kwh_total||0) > 0 ? Number(f.valor_total||0)/Number(f.kwh_total||0) : 0).toFixed(4)
+    ]);
+
+    rows.push([]); // linha vazia entre faturas
+  }
+
+  exportCsv(`safe-energy-rateio-${new Date().toISOString().slice(0, 10)}.csv`, rows);
 }
 
 /* ── Impressão / relatório ── */
