@@ -1,212 +1,137 @@
+#include <ArduinoJson.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
-#include <ArduinoJson.h>
-#include <time.h>
+#include "EmonLib.h"
 
-#include "config.h"
+// --- CONFIGURAÇÕES DE REDE ---
+const char* ssid     = "Giih";
+const char* password = "luag1611";
 
-// ================================================================
-//  VARIÁVEIS GLOBAIS
-// ================================================================
-static unsigned long lastPublish = 0;
-static unsigned long seq         = 0;
+// --- CONFIGURAÇÃO DA API ---
+const char* serverUrlMedicoes = "https://backendsafe.onrender.com/medicoes/";
 
-// ================================================================
-//  WIFI
-// ================================================================
-void connectWiFi() {
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+// --- CONFIGURAÇÃO DO HARDWARE ---
+EnergyMonitor emon1;
+const int pinoSensor = 13; // GPIO13
 
-  Serial.print("Conectando ao WiFi");
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("\nWiFi conectado — IP: " + WiFi.localIP().toString());
+// --- VARIÁVEIS DE STATUS ---
+int leiturasCiclo = 0;
+int enviosSucesso = 0;
+int enviosFalha   = 0;
+
+void printSeparador() {
+  Serial.println("==================================================");
 }
 
-// ================================================================
-//  NTP — timestamp ISO 8601 no fuso correto
-//  Formato esperado pela API FastAPI: "2026-04-01T14:30:00"
-// ================================================================
-void setupTime() {
-  // TZ_OFFSET_SEC = -10800 para Brasil (UTC-3)
-  configTime(TZ_OFFSET_SEC, 0, "pool.ntp.org", "time.nist.gov");
-
-  Serial.print("Sincronizando NTP");
-  time_t now = 0;
-  int tentativas = 0;
-  while (now < 100000 && tentativas < 20) {
-    delay(500);
-    time(&now);
-    Serial.print(".");
-    tentativas++;
-  }
-  Serial.println(now > 100000 ? "\nNTP OK" : "\nNTP FALHOU — timestamps incorretos");
-}
-
-// Retorna timestamp local no formato aceito pela API: "YYYY-MM-DDTHH:MM:SS"
-String getTimestamp() {
-  time_t now;
-  time(&now);
-  if (now < 100000) return "";   // NTP ainda não sincronizou
-
-  struct tm t;
-  localtime_r(&now, &t);         // usa fuso local (TZ_OFFSET_SEC)
-
-  char buf[20];
-  strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%S", &t);
-  return String(buf);
-}
-
-// ================================================================
-//  LEITURA RMS — duas passagens para remoção de offset DC
-// ================================================================
-float readCurrentRMS() {
-  const int samples  = (SAMPLE_RATE_HZ * WINDOW_MS) / 1000;
-  const int delay_us = 1000000 / SAMPLE_RATE_HZ;
-
-  // Passagem 1: calcula offset (valor médio = ponto central do sinal AC)
-  uint64_t soma = 0;
-  for (int i = 0; i < samples; i++) {
-    soma += analogRead(ADC_PIN);
-    delayMicroseconds(delay_us);
-  }
-  float offset = (float)soma / samples;
-
-  // Passagem 2: calcula RMS removendo o offset
-  double somaQuadrados = 0;
-  for (int i = 0; i < samples; i++) {
-    float val = (float)analogRead(ADC_PIN) - offset;
-    somaQuadrados += (double)val * val;
-    delayMicroseconds(delay_us);
-  }
-
-  float rmsCounts = sqrt(somaQuadrados / samples);
-  float vrms_adc  = (rmsCounts / (float)((1 << ADC_BITS) - 1)) * ADC_VREF;
-  float irms_sec  = vrms_adc / BURDEN_OHMS;
-  float irms      = irms_sec * CT_RATIO * CALIBRATION_GAIN;
-
-  // Descarta leituras de ruído abaixo de 0.3A
-  return (irms < 0.3f) ? 0.0f : irms;
-}
-
-// ================================================================
-//  ENVIO PARA A API — POST /medicoes
-//
-//  Payload esperado pela API (schema MedicaoCreate):
-//  {
-//    "timestamp": "2026-04-01T14:30:00",
-//    "canal_id":  1,
-//    "corrente":  18.5,
-//    "tensao":    220.0,
-//    "potencia":  4070.0,   <- opcional, API calcula se omitido
-//    "valido":    true
-//  }
-// ================================================================
-bool enviarMedicao(float corrente, float tensao, float potencia, const String& timestamp) {
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[HTTP] WiFi desconectado — pulando envio");
-    return false;
-  }
-
-  if (timestamp.length() == 0) {
-    Serial.println("[HTTP] Timestamp inválido — NTP não sincronizado");
-    return false;
-  }
-
-  // Monta JSON
-  StaticJsonDocument<256> doc;
-  doc["timestamp"] = timestamp;
-  doc["canal_id"]  = CANAL_ID;
-  doc["corrente"]  = serialized(String(corrente, 3));
-  doc["tensao"]    = serialized(String(tensao,   2));
-  doc["potencia"]  = serialized(String(potencia, 2));
-  doc["valido"]    = true;
-
-  char payload[256];
-  serializeJson(doc, payload);
-
-  // Monta URL
-  String url = String(API_USE_HTTPS ? "https" : "http") +
-               "://" + API_HOST + API_ENDPOINT;
-
-  HTTPClient http;
-
-  if (API_USE_HTTPS) {
-    // Sem verificação de certificado — adequado para protótipo/railway
-    // Em produção, use WiFiClientSecure com o certificado raiz
-    http.begin(url);
-  } else {
-    http.begin(url);
-  }
-
-  http.addHeader("Content-Type", "application/json");
-  http.setTimeout(8000);   // 8s timeout
-
-  int httpCode = http.POST(payload);
-
-  if (httpCode == 201) {
-    Serial.println("[HTTP] ✓ Medição enviada — " + timestamp +
-                   " | I=" + String(corrente, 2) + "A" +
-                   " | P=" + String(potencia,  1) + "W");
-    http.end();
-    return true;
-  } else {
-    String resp = http.getString();
-    Serial.println("[HTTP] ✗ Erro " + String(httpCode) + " — " + resp);
-    http.end();
-    return false;
-  }
-}
-
-// ================================================================
-//  SETUP
-// ================================================================
 void setup() {
   Serial.begin(115200);
-  delay(500);
+  delay(1000);
 
-  Serial.println("\n=== EnergySafe ESP32 ===");
-  Serial.println("Canal ID: " + String(CANAL_ID));
+  printSeparador();
+  Serial.println("        ENERGYSAFE — INICIALIZANDO SISTEMA");
+  printSeparador();
 
-  analogReadResolution(ADC_PIN);
-  analogSetPinAttenuation(ADC_PIN, ADC_11db);
+  // --- SENSOR ---
+  Serial.printf("[SENSOR]  Pino: GPIO%d | Calibração: 111.1\n", pinoSensor);
+  emon1.current(pinoSensor, 111.1);
+  Serial.println("[SENSOR]  ✅ Inicializado.");
 
-  connectWiFi();
-  setupTime();
-}
+  printSeparador();
 
-// ================================================================
-//  LOOP
-// ================================================================
-void loop() {
-  // Reconecta WiFi se cair
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("[WiFi] Reconectando...");
-    WiFi.reconnect();
-    delay(3000);
-    return;
+  // --- WI-FI ---
+  Serial.printf("[Wi-Fi]   Conectando a: %s\n", ssid);
+  WiFi.begin(ssid, password);
+
+  int tentativas = 0;
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    tentativas++;
+    Serial.printf("[Wi-Fi]   Tentativa %d/20...\n", tentativas);
+    if (tentativas >= 20) {
+      Serial.println("[Wi-Fi]   ❌ Falha. Reiniciando ESP32...");
+      delay(1000);
+      ESP.restart();
+    }
   }
 
-  unsigned long agora = millis();
-  if (agora - lastPublish < PUBLISH_INTERVAL_MS) return;
-  lastPublish = agora;
+  Serial.println("[Wi-Fi]   ✅ Conectado!");
+  Serial.printf("[Wi-Fi]   IP: %s | RSSI: %d dBm\n",
+    WiFi.localIP().toString().c_str(), WiFi.RSSI());
 
-  seq++;
+  printSeparador();
+  Serial.printf("[API]     Endpoint: %s\n", serverUrlMedicoes);
+  printSeparador();
+  Serial.println("[SISTEMA] ✅ Pronto. Iniciando leituras...\n");
+}
 
-  // Leitura
-  float corrente = readCurrentRMS();
-  float tensao   = FIXED_VRMS;
-  float potencia = corrente * tensao;   // W — P = I × V (fator de potência = 1)
+void loop() {
+  leiturasCiclo++;
+  printSeparador();
+  Serial.printf("[CICLO #%d] Uptime: %lus\n", leiturasCiclo, millis() / 1000);
 
-  String timestamp = getTimestamp();
+  // --- LEITURA ---
+  Serial.println("[SENSOR]  Calculando corrente RMS...");
+  double Irms = emon1.calcIrms(1480);
 
-  // Log serial
-  Serial.printf("[%lu] seq=%lu | I=%.3fA | V=%.1fV | P=%.1fW | ts=%s\n",
-                agora, seq, corrente, tensao, potencia, timestamp.c_str());
+  if (Irms < 0.1) {
+    Serial.printf("[SENSOR]  Leitura bruta: %.4f A → ruído, zerado.\n", Irms);
+    Irms = 0.0;
+  }
 
-  // Envia para a API
-  enviarMedicao(corrente, tensao, potencia, timestamp);
+  double tensao   = 220.0;
+  double potencia = Irms * tensao;
+
+  Serial.printf("[SENSOR]  Corrente: %.3f A | Tensão: %.1f V | Potência: %.2f W\n",
+    Irms, tensao, potencia);
+
+  // --- ENVIO ---
+  if (WiFi.status() == WL_CONNECTED) {
+
+    // Monta JSON alinhado com os campos esperados pelo backend
+    StaticJsonDocument<256> doc;
+    doc["canal_id"] = 1;          // ID do canal/sensor cadastrado no backend
+    doc["corrente"] = Irms;       // Amperes com 3 casas
+    doc["tensao"]   = tensao;     // Volts
+    doc["potencia"] = potencia;   // Watts
+    doc["valido"]   = (Irms > 0); // false se leitura zerada por ruído
+
+    String json;
+    serializeJson(doc, json);
+
+    Serial.printf("[API]     Payload: %s\n", json.c_str());
+
+    HTTPClient http;
+    http.begin(serverUrlMedicoes);
+    http.addHeader("Content-Type", "application/json");
+
+    int httpCode = http.POST(json);
+
+    if (httpCode > 0) {
+      enviosSucesso++;
+      String resposta = http.getString();
+      Serial.printf("[API]     ✅ HTTP %d | Resposta: %s\n", httpCode, resposta.c_str());
+
+      // ⚠️  Alerta se o servidor retornou 2xx mas com erro no corpo
+      if (httpCode == 422) {
+        Serial.println("[API]     ⚠️  HTTP 422 — Payload rejeitado! Verifique os campos enviados.");
+      }
+    } else {
+      enviosFalha++;
+      Serial.printf("[API]     ❌ Erro de conexão: %d — Verifique a URL e o servidor.\n", httpCode);
+    }
+
+    http.end();
+
+  } else {
+    Serial.println("[Wi-Fi]   ❌ Desconectado. Reconectando...");
+    WiFi.disconnect();
+    WiFi.begin(ssid, password);
+  }
+
+  // --- STATS ---
+  Serial.printf("[STATS]   Leituras: %d | Sucesso: %d | Falha: %d\n",
+    leiturasCiclo, enviosSucesso, enviosFalha);
+  Serial.println("[SISTEMA] Aguardando 5s...\n");
+
+  delay(5000);
 }
