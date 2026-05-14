@@ -430,21 +430,10 @@ energysafe/
 
 ## Roadmap
 
-- [ ] Job noturno automático para cálculo de `consumo_diario`
 - [ ] Endpoint `POST /faturas` com cálculo automático de rateio
 - [ ] Tela de cadastro de faturas no frontend
-- [ ] Autenticação real com JWT
-- [ ] Suporte a múltiplos fusos horários
-- [ ] Medição real de tensão (substituir `FIXED_VRMS`)
-- [ ] Exportação de relatório de rateio em PDF
 - [ ] Alertas por e-mail / push notification
 
----
-
-## Limitações Conhecidas
-
-- **Sem autenticação real** — o acesso é controlado por e-mail fixo no frontend. Para produção, implemente JWT.
-- **kWh calculado por aproximação** — o job de `consumo_diario` usa média de potência × horas, não integração exata. A precisão aumenta com intervalos de medição menores.
 
 ---
 
