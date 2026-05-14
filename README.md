@@ -181,7 +181,8 @@ Rede Elétrica (CA)
                          HTTP POST                       pending.csv
                        (HTTPS/TLS)                        no SD card
 
-    
+---
+   
 ### Configuração do firmware
 
 Edite o bloco de configurações no topo do arquivo `.ino`:
