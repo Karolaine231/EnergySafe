@@ -159,6 +159,38 @@ A conexão usa `WiFiClientSecure` com `setInsecure()`, aceitando qualquer certif
 
 ---
 
+### Cadeia de medição
+
+Rede Elétrica (CA)
+      │
+      ├── SCT-013 (TC de corrente) ──► sinal analógico de tensão
+      │                                       │
+      └── ZMPT101B (TT de tensão) ──►  sinal analógico de tensão
+                                              │
+                                    ADC interno do ESP32
+                                    (GPIOs 34/35/32 e 33/25/26)
+                                              │
+                                         EmonLib
+                                    calcVI(1480, 2000)
+                                              │
+                              ┌───────────────┼───────────────┐
+                           Irms (A)        Vrms (V)       Potência (W)
+                                              │
+                                       Filtragem de ruído
+                              (I < 0.1A → 0 | V < 5V → 0)
+                                              │
+                                        Timestamp NTP
+                                              │
+                                       Payload JSON
+                                              │
+                              ┌───────────────┴───────────────┐
+                         Wi-Fi ok?                       Wi-Fi falhou?
+                              │                                │
+                         HTTP POST                       pending.csv
+                       (HTTPS/TLS)                        no SD card
+
+---
+
 ## 🔄 Fluxo de Tolerância a Falhas
 
 | Situação | Comportamento |
