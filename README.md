@@ -150,44 +150,36 @@ R$ área = (kWh área / kWh total medido) × valor da fatura
 | Sensor de tensão | ZMPT101B | 3 |
 | Módulo SD Card | SPI (CS GPIO5) | 1 |
 
-## 🔌 Cadeia de Medição
+### Cadeia de Medição
 
-```mermaid
-flowchart TD
-    A[Rede Elétrica (CA)]
-    
-    A --> B[SCT-013 (TC de corrente)]
-    A --> C[ZMPT101B (TT de tensão)]
-    
-    B --> D[Sinal analógico de tensão (corrente)]
-    C --> E[Sinal analógico de tensão (tensão)]
-    
-    D --> F[ADC interno do ESP32]
-    E --> F
-    
-    F --> G[GPIOs: 34, 35, 32, 33, 25, 26]
-    G --> H[EmonLib]
-    
-    H --> I[calcVI(1480, 2000)]
-    
-    I --> J[Irms (A)]
-    I --> K[Vrms (V)]
-    I --> L[Potência (W)]
-    
-    J --> M[Filtragem de ruído]
-    K --> M
-    L --> M
-    
-    M --> N[I < 0.1A → 0]
-    M --> O[V < 5V → 0]
-    
-    M --> P[Timestamp NTP]
-    P --> Q[Payload JSON]
-    
-    Q --> R{Wi-Fi disponível?}
-    
-    R -->|Sim| S[HTTP POST (HTTPS/TLS)]
-    R -->|Não| T[pending.csv (SD Card)]
+```text
+Rede Elétrica (CA)
+      │
+      ├── SCT-013 (TC de corrente) ──► sinal analógico de tensão
+      │                                       │
+      └── ZMPT101B (TT de tensão) ──►  sinal analógico de tensão
+                                              │
+                                    ADC interno do ESP32
+                                    (GPIOs 34/35/32 e 33/25/26)
+                                              │
+                                         EmonLib
+                                    calcVI(1480, 2000)
+                                              │
+                              ┌───────────────┼───────────────┐
+                           Irms (A)        Vrms (V)       Potência (W)
+                                              │
+                                       Filtragem de ruído
+                              (I < 0.1A → 0 | V < 5V → 0)
+                                              │
+                                        Timestamp NTP
+                                              │
+                                       Payload JSON
+                                              │
+                              ┌───────────────┴───────────────┐
+                         Wi-Fi ok?                       Wi-Fi falhou?
+                              │                                │
+                         HTTP POST                       pending.csv
+                       (HTTPS/TLS)                        no SD card
 
     
 ### Configuração do firmware
