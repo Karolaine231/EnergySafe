@@ -143,48 +143,73 @@ R$ área = (kWh área / kWh total medido) × valor da fatura
 
 ### Componentes por ponto de medição
 
-| Componente | Especificação |
-|---|---|
-| Microcontrolador | ESP32 (qualquer variante com ADC) |
-| Sensor de corrente | SCT-013-000 (100A : 50mA) |
-| Resistor burden | 33Ω |
-| Alimentação | 3.3V (regulada) |
-| Conectividade | Wi-Fi 2.4GHz |
+| Componente | Modelo | Qtd |
+|---|---|---|
+| Microcontrolador | ESP32 (38 pinos) | 1 |
+| Sensor de corrente | SCT-013-030 | 3 |
+| Sensor de tensão | ZMPT101B | 3 |
+| Módulo SD Card | SPI (CS GPIO5) | 1 |
 
 ### Cadeia de medição
 
-```
-Circuito AC
-    │
-TC Clamp (SCT-013) → sinal AC proporcional à corrente
-    │
-Resistor burden (33Ω) → converte corrente → tensão
-    │
-Capacitor de deslocamento → eleva o sinal ao centro do ADC
-    │
-ESP32 GPIO34 (ADC 12 bits, 0–3.3V)
-    │
-Cálculo RMS por software (2000 amostras / 1 segundo)
-    │
-POST /medicoes → API
-```
+Rede Elétrica (CA)
+      │
+      ├── SCT-013 (TC de corrente) ──► sinal analógico de tensão
+      │                                       │
+      └── ZMPT101B (TT de tensão) ──►  sinal analógico de tensão
+                                              │
+                                    ADC interno do ESP32
+                                    (GPIOs 34/35/32 e 33/25/26)
+                                              │
+                                         EmonLib
+                                    calcVI(1480, 2000)
+                                              │
+                              ┌───────────────┼───────────────┐
+                           Irms (A)        Vrms (V)       Potência (W)
+                                              │
+                                       Filtragem de ruído
+                              (I < 0.1A → 0 | V < 5V → 0)
+                                              │
+                                        Timestamp NTP
+                                              │
+                                       Payload JSON
+                                              │
+                              ┌───────────────┴───────────────┐
+                         Wi-Fi ok?                       Wi-Fi falhou?
+                              │                                │
+                         HTTP POST                       pending.csv
+                       (HTTPS/TLS)                        no SD card
 
-### Configuração do firmware (`config.h`)
+### Configuração do firmware
+
+Edite o bloco de configurações no topo do arquivo `.ino`:
 
 ```cpp
-#define WIFI_SSID       "sua_rede"
-#define WIFI_PASSWORD   "sua_senha"
+// Wi-Fi
+const char* WIFI_SSID     = "SuaRede";
+const char* WIFI_PASSWORD = "SuaSenha";
 
-#define API_HOST        "sua-api.up.railway.app"
-#define API_PORT        443
-#define API_USE_HTTPS   true
+// Endpoint da API
+const char* API_URL = "https://seu-backend.com/medicoes/";
 
-#define CANAL_ID        1          // ID do canal no banco de dados
-#define PUBLISH_INTERVAL_MS 30000  // 30 segundos
+// IDs dos canais no backend
+const int CANAL_A = 1;
+const int CANAL_B = 2;
+const int CANAL_C = 3;
 
-#define CT_RATIO        2000.0f    // SCT-013-000
-#define BURDEN_OHMS     33.0f
-#define FIXED_VRMS      220.0f
+// Calibração dos sensores
+const double CAL_CORRENTE = 111.1;   // SCT-013-030
+const double CAL_TENSAO   = 234.26;  // ZMPT101B — ajuste conforme sua rede
+const double DEFASAGEM    = 1.7;
+```
+
+### Intervalos
+
+```cpp
+#define COLLECT_INTERVAL_MS  60000UL  // leitura a cada 60s
+#define RETRY_INTERVAL_MS   120000UL  // reenvio SD a cada 2min
+#define WIFI_CHECK_MS        15000UL  // verificação Wi-Fi a cada 15s
+#define MAX_PENDING_LINES     3000    // limite do buffer no SD
 ```
 
 > Cada ESP32 físico tem seu próprio `config.h` com o `CANAL_ID` correspondente ao canal cadastrado no banco.
