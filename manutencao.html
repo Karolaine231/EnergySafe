@@ -4,7 +4,6 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Safe Energy • Manutenção</title>
-
   <link rel="icon" type="image/png" sizes="32x32" href="EnergiaVerdeLogo.png">
   <link rel="stylesheet" href="manutencao.css" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
@@ -50,16 +49,22 @@
       <button class="btn-aplicar" id="btnAplicar">Aplicar filtros</button>
     </div>
 
-    <!-- ── Navegação principal — botões grandes ── -->
+    <!-- Navegação principal -->
     <nav class="sidenav-nav">
       <div class="nav-section-label">Painéis</div>
 
       <button class="nav-item active" data-page="consumo">
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="2" y="3" width="20" height="14" rx="2"/>
-          <path d="M8 21h8M12 17v4"/>
+          <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/>
         </svg>
         Consumo
+      </button>
+
+      <button class="nav-item" data-page="potencia">
+        <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>
+        </svg>
+        Potência
       </button>
 
       <button class="nav-item" data-page="medicoes">
@@ -72,16 +77,14 @@
       <button class="nav-item" data-page="alertas">
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
-          <line x1="12" y1="9" x2="12" y2="13"/>
-          <line x1="12" y1="17" x2="12.01" y2="17"/>
+          <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
         </svg>
         Alertas
       </button>
 
       <button class="nav-item" data-page="dispositivos">
         <svg class="nav-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <rect x="2" y="7" width="20" height="14" rx="2"/>
-          <path d="M16 3H8M12 3v4"/>
+          <rect x="2" y="7" width="20" height="14" rx="2"/><path d="M16 3H8M12 3v4"/>
         </svg>
         Dispositivos
       </button>
@@ -178,6 +181,96 @@
         </div>
         <div class="chart-hint" id="chartHint">Atualizado automaticamente conforme os filtros.</div>
       </div>
+    </div>
+
+    <!-- ──────────────────────────────
+         PÁGINA: POTÊNCIA ← NOVA
+    ────────────────────────────── -->
+    <div class="page" id="page-potencia">
+
+      <!-- Cards de resumo das 3 fases -->
+      <div class="potencia-kpis">
+        <div class="pot-card">
+          <div class="pot-icon">⚡</div>
+          <div class="pot-label">Potência Ativa Total</div>
+          <div class="pot-value" id="potAtivaTot">— <span>W</span></div>
+          <div class="pot-sub">Trabalho real consumido</div>
+        </div>
+        <div class="pot-card">
+          <div class="pot-icon">〜</div>
+          <div class="pot-label">Potência Aparente Total</div>
+          <div class="pot-value" id="potAparenteTot">— <span>VA</span></div>
+          <div class="pot-sub">Produto vetorial I × V</div>
+        </div>
+        <div class="pot-card">
+          <div class="pot-icon">↻</div>
+          <div class="pot-label">Potência Reativa Total</div>
+          <div class="pot-value" id="potReativaTot">— <span>VAr</span></div>
+          <div class="pot-sub">Componente indutiva/capacitiva</div>
+        </div>
+        <div class="pot-card pot-card--fp">
+          <div class="pot-icon">◎</div>
+          <div class="pot-label">Fator de Potência Médio</div>
+          <div class="pot-value" id="fatPotMedio">— <span>cos(ϕ)</span></div>
+          <div class="pot-sub">Eficiência da carga</div>
+        </div>
+      </div>
+
+      <!-- Tabela por fase -->
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <h2>Leitura por fase</h2>
+            <p>Última medição de cada canal (Fase A = canal 1, B = canal 2, C = canal 3).</p>
+          </div>
+          <button class="btn-action primary" id="btnRefreshPotencia" style="width:auto;padding:8px 16px;border-radius:10px;font-size:12px;">↺ Atualizar</button>
+        </div>
+        <div class="table-wrap">
+          <table class="table" id="tableFases">
+            <thead>
+              <tr>
+                <th>Fase</th>
+                <th>Corrente (A)</th>
+                <th>Tensão (V)</th>
+                <th>P. Ativa (W)</th>
+                <th>P. Aparente (VA)</th>
+                <th>P. Reativa (VAr)</th>
+                <th>Fator de Potência</th>
+                <th>Timestamp</th>
+              </tr>
+            </thead>
+            <tbody id="tbodyFases">
+              <tr><td colspan="8">Carregando medições...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Gráfico temporal potência -->
+      <div class="card">
+        <div class="card-head">
+          <div>
+            <h2>Evolução temporal</h2>
+            <p>Potência ativa e fator de potência ao longo do tempo.</p>
+          </div>
+          <label class="chip">
+            Exibir
+            <select id="chartModePotencia">
+              <option value="potencia_ativa">P. Ativa (W)</option>
+              <option value="potencia_aparente">P. Aparente (VA)</option>
+              <option value="potencia_reativa">P. Reativa (VAr)</option>
+              <option value="fator_potencia">Fator de Potência</option>
+            </select>
+          </label>
+        </div>
+        <div class="chart-wrap">
+          <div class="chart-inner">
+            <canvas id="chartPotencia"></canvas>
+          </div>
+        </div>
+        <div class="chart-hint">Atualizado a cada 10 segundos conforme ciclo do ESP32.</div>
+      </div>
+
     </div>
 
     <!-- ──────────────────────────────
