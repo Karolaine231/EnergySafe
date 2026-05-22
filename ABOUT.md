@@ -140,8 +140,8 @@ O projeto foi desenvolvido com foco nos Objetivos de Desenvolvimento Sustentáve
 |---|---|---|
 | Frontend | [Karolaine231/EnergySafe](https://github.com/Karolaine231/EnergySafe) | `Front` |
 | Backend API | [Julyxdias/BackendSafe](https://github.com/Julyxdias/BackendSafe) | `Julyxdias-Backend-API` |
-| Firmware ESP32 | — | — |
-| Schema SQL | — | — |
+| Firmware ESP32 |[Karolaine231/EnergySafe/tree/Firmware](https://github.com/Karolaine231/EnergySafe/tree/Firmware))| 'Firmware' |
+| Schema SQL | [Karolaine231/EnergySafe/tree/Schemas](https://github.com/Karolaine231/EnergySafe/tree/Schemas) | 'Schemas' |
 
 ---
 
