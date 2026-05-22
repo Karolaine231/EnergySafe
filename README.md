@@ -1,224 +1,322 @@
-# ⚡ EnergySafe — Banco de Dados
+# 🗄️ EnergySafe — Banco de Dados (PostgreSQL)
 
-Documentação completa do banco PostgreSQL do sistema EnergySafe.  
-O banco é executado via Docker localmente e hospedado no **Render** em produção.
-
----
-
-##  Conexão
-
-| Ambiente | Detalhes |
-|---|---|
-| Local (Docker) | `postgresql://postgres:******@localhost:5432/energysafe` |
-| Produção (Render) | Variável de ambiente `DATABASE_URL` no serviço BackendSafe |
+Schema completo do banco de dados do backend EnergySafe. Inclui todas as tabelas, sequências, índices, constraints e triggers. Os dados de exemplo presentes no dump representam uma instalação real de 3 andares de um prédio administrativo com 3 quadros elétricos monitorados.
 
 ---
 
-##  Executando localmente
+## 📦 Requisitos
+
+- PostgreSQL **16+** (dump gerado na versão 18.3)
+- `psql` ou qualquer client compatível (DBeaver, TablePlus, etc.)
+
+---
+
+## 🚀 Como restaurar
 
 ```bash
-docker-compose up -d
+# 1. Crie o banco (se ainda não existir)
+createdb energysafe
+
+# 2. Restaure o schema + dados
+psql -d energysafe -f energysafe_schema.sql
 ```
 
-```yaml
-# docker-compose.yml
-services:
-  postgres:
-    image: postgres:15
-    container_name: energysafe_postgres
-    environment:
-      POSTGRES_USER: *******
-      POSTGRES_PASSWORD: *******
-      POSTGRES_DB: ********
-    ports:
-      - "5432:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    restart: always
-```
-
-Para verificar se o container está rodando:
+Ou com usuário específico:
 
 ```bash
-docker ps
-```
-
-Para acessar o banco via CLI:
-
-```bash
-docker exec -it energysafe_postgres psql -U postgres -d energysafe
+psql -U seu_usuario -d energysafe -f energysafe_schema.sql
 ```
 
 ---
 
-##  Hierarquia do Modelo
+## 🗺️ Diagrama do Schema
 
 ```
 locais
-  └── quadros  (local_id → locais.id)
-        └── dispositivos  (quadro_id → quadros.id)
-              └── canais_medicao  (dispositivo_id → dispositivos.id)
-                    ├── medicoes  (canal_id → canais_medicao.id)
-                    └── alertas   (canal_id → canais_medicao.id)
+  ├── areas                  (local_id → locais.id)
+  ├── enel_instalacoes       (local_id → locais.id)
+  ├── faturas                (local_id → locais.id)
+  │     ├── fatura_itens     (fatura_id → faturas.id)
+  │     ├── faturas_ocr      (fatura_id → faturas.id)
+  │     └── rateio           (fatura_id → faturas.id)
+  ├── metas                  (local_id → locais.id)
+  └── tarifas                (local_id → locais.id)
+
+quadros
+  ├── quadros.quadro_pai_id  (auto-referência — hierarquia de quadros)
+  ├── local_id → locais.id
+  ├── area_id  → areas.id
+  └── dispositivos           (quadro_id → quadros.id)
+        ├── dispositivos_status  (dispositivo_id → dispositivos.id)
+        └── canais_medicao       (dispositivo_id → dispositivos.id)
+              ├── medicoes       (canal_id → canais_medicao.id)
+              ├── consumo_diario (canal_id → canais_medicao.id)
+              └── alertas        (canal_id → canais_medicao.id)
 ```
 
 ---
 
-##  Tabelas
+## 📋 Tabelas
 
 ### `locais`
-Representa ambientes físicos monitorados.
+Unidades físicas monitoradas (prédio, andar, setor).
 
 | Coluna | Tipo | Descrição |
 |---|---|---|
-| id | SERIAL PK | Identificador |
-| nome | TEXT | Ex: Prédio ADM |
-| andar | INTEGER | Número do andar |
-| descricao | TEXT | Descrição livre |
+| `id` | integer PK | — |
+| `nome` | text NOT NULL | Ex: "Predio ADM - 1 Andar" |
+| `andar` | integer | Número do andar |
+| `descricao` | text | Descrição livre |
+
+---
+
+### `areas`
+Subdivisões dentro de um local (salas, setores).
+
+| Coluna | Tipo | Descrição |
+|---|---|---|
+| `id` | integer PK | — |
+| `nome` | text NOT NULL | Ex: "Terreo ADM" |
+| `local_id` | integer FK | → `locais.id` |
+| `descricao` | text | — |
 
 ---
 
 ### `quadros`
-Painéis elétricos, com suporte a hierarquia (quadro pai/filho).
+Quadros elétricos de distribuição, com suporte a hierarquia (quadro pai → filhos).
 
 | Coluna | Tipo | Descrição |
 |---|---|---|
-| id | SERIAL PK | Identificador |
-| nome | TEXT | Ex: QD-ADM-3 |
-| local_id | FK → locais | Local onde está instalado |
-| quadro_pai_id | FK → quadros | Quadro de nível superior (nullable) |
-| descricao | TEXT | Descrição livre |
+| `id` | integer PK | — |
+| `nome` | text NOT NULL | Ex: "QLT-307" |
+| `local_id` | integer FK | → `locais.id` |
+| `area_id` | integer FK | → `areas.id` |
+| `quadro_pai_id` | integer FK | → `quadros.id` (auto-referência) |
+| `descricao` | text | — |
 
 ---
 
 ### `dispositivos`
-Hardware de medição instalado nos quadros (ex: ESP32).
+ESP32s instalados nos quadros elétricos.
 
 | Coluna | Tipo | Descrição |
 |---|---|---|
-| id | SERIAL PK | Identificador |
-| nome | TEXT | Ex: ESP32_QD3 |
-| quadro_id | FK → quadros | Quadro onde está instalado |
-| ativo | BOOLEAN | Se está em operação |
-| data_instalacao | TIMESTAMP | Data de instalação |
-| observacoes | TEXT | Notas técnicas |
+| `id` | integer PK | — |
+| `nome` | text NOT NULL | Ex: "ESP32_ADM0_A307" |
+| `quadro_id` | integer FK | → `quadros.id` |
+| `ativo` | boolean | Default `true` |
+| `data_instalacao` | timestamp | — |
+| `observacoes` | text | — |
+
+---
+
+### `dispositivos_status`
+Status operacional atual de cada dispositivo (1-para-1).
+
+| Coluna | Tipo | Descrição |
+|---|---|---|
+| `id` | integer PK | — |
+| `dispositivo_id` | integer FK UNIQUE | → `dispositivos.id` |
+| `status` | text | `ONLINE` \| `ATRASO` \| `OFFLINE` |
+| `ultima_leitura` | timestamp | Última vez que enviou dados |
+| `potencia_atual` | real | Potência em W da última leitura |
+| `atualizado_em` | timestamp | Auto-atualizado |
 
 ---
 
 ### `canais_medicao`
-Sensores por fase elétrica dentro de cada dispositivo.
+Canais de medição por fase de cada dispositivo (até 3 por ESP32: A, B, C).
 
 | Coluna | Tipo | Descrição |
 |---|---|---|
-| id | SERIAL PK | Identificador |
-| dispositivo_id | FK → dispositivos | Dispositivo pai |
-| fase | TEXT | A, B ou C (CHECK constraint) |
-| tipo | TEXT | corrente, tensao |
-| descricao | TEXT | Ex: ADM1 Fase A |
+| `id` | integer PK | — |
+| `dispositivo_id` | integer FK | → `dispositivos.id` |
+| `fase` | text | `A` \| `B` \| `C` (CHECK constraint) |
+| `tipo` | text | Ex: `corrente` |
+| `descricao` | text | Ex: "ADM0_A307 Fase A" |
 
 ---
 
 ### `medicoes`
-Leituras enviadas pelos dispositivos ESP32 via `POST /medicoes`.
+Série temporal de medições enviadas pelo firmware ESP32. Tabela principal do sistema.
 
 | Coluna | Tipo | Descrição |
 |---|---|---|
-| id | BIGSERIAL PK | Identificador (alto volume) |
-| timestamp | TIMESTAMP | Momento da leitura |
-| canal_id | FK → canais_medicao | Canal que gerou a leitura |
-| corrente | REAL | Corrente elétrica (A) |
-| tensao | REAL | Tensão elétrica (V) |
-| potencia | REAL | Potência calculada (W) — P = I × V |
-| valido | BOOLEAN | Se a leitura é válida |
-| criado_em | TIMESTAMP | Momento de inserção no banco |
+| `id` | bigint PK | — |
+| `timestamp` | timestamp NOT NULL | Horário da medição (NTP, GMT-3) |
+| `canal_id` | integer FK | → `canais_medicao.id` |
+| `corrente` | real | Irms em Amperes |
+| `tensao` | real | Vrms em Volts |
+| `potencia` | real | P = V × I em Watts |
+| `potencia_ativa` | double | Watts (reservado para medição com FP real) |
+| `potencia_aparente` | double | VA |
+| `potencia_reativa` | double | VAr |
+| `fator_potencia` | double | 0.0 – 1.0 |
+| `valido` | boolean | `false` se leitura descartada |
+| `criado_em` | timestamp | Inserção no banco |
 
 **Índices:**
 ```sql
-CREATE INDEX idx_medicoes_timestamp ON medicoes(timestamp);
-CREATE INDEX idx_medicoes_canal     ON medicoes(canal_id);
+idx_medicoes_canal      — canal_id
+idx_medicoes_timestamp  — timestamp
 ```
+
+---
+
+### `consumo_diario`
+Agregação diária de kWh por canal (gerada pelo backend a partir de `medicoes`).
+
+| Coluna | Tipo | Descrição |
+|---|---|---|
+| `id` | bigint PK | — |
+| `canal_id` | integer FK | → `canais_medicao.id` |
+| `data` | date NOT NULL | Dia da agregação |
+| `kwh` | real NOT NULL | Consumo do dia |
+| `criado_em` | timestamp | — |
+
+**Constraint única:** `(canal_id, data)` — um registro por canal por dia.
 
 ---
 
 ### `alertas`
-Eventos gerados automaticamente pelo backend após cada medição.
+Alertas gerados automaticamente por desvios nos valores medidos.
 
 | Coluna | Tipo | Descrição |
 |---|---|---|
-| id | SERIAL PK | Identificador |
-| canal_id | FK → canais_medicao | Canal que gerou o alerta |
-| tipo | TEXT | `sobrecorrente` \| `consumo_fora_horario` \| `queda_brusca` |
-| nivel | TEXT | `info` \| `aviso` \| `critico` |
-| mensagem | TEXT | Descrição do alerta |
-| valor | REAL | Valor medido que violou a regra |
-| limite | REAL | Limite configurado |
-| timestamp | TIMESTAMP | Momento do evento |
-| resolvido | BOOLEAN | Se foi tratado |
-| criado_em | TIMESTAMP | Momento de inserção |
+| `id` | integer PK | — |
+| `canal_id` | integer FK | → `canais_medicao.id` |
+| `tipo` | text | Ex: `queda_brusca`, `sobrecarga` |
+| `nivel` | text | Ex: `aviso`, `critico` |
+| `mensagem` | text | Descrição legível |
+| `valor` | real | Valor medido que gerou o alerta |
+| `limite` | real | Threshold configurado |
+| `timestamp` | timestamp NOT NULL | Momento do alerta |
+| `resolvido` | boolean | Default `false` |
+| `criado_em` | timestamp | — |
 
-**Índice:**
-```sql
-CREATE INDEX idx_alertas_timestamp ON alertas(timestamp);
-```
+**Índice:** `idx_alertas_timestamp`
 
 ---
 
-##  Regras de Alerta
+### `faturas`
+Faturas de energia elétrica por local (lançamento manual ou via integração Enel).
 
-Os alertas são gerados pelo backend Python (sem triggers no banco) após cada `POST /medicoes`.
-
-| Tipo | Nível | Condição |
+| Coluna | Tipo | Descrição |
 |---|---|---|
-| `sobrecorrente` | `critico` | `corrente > 40A` |
-| `consumo_fora_horario` | `aviso` | `corrente > 10A` e hora entre 22h–6h |
-| `queda_brusca` | `aviso` | Corrente caiu abaixo de 30% da leitura anterior |
+| `id` | integer PK | — |
+| `local_id` | integer FK | → `locais.id` |
+| `mes` | date NOT NULL | Competência (1º dia do mês) |
+| `valor_total` | numeric(10,2) | R$ total — NUMERIC para evitar float |
+| `kwh_total` | numeric(10,3) | Consumo total em kWh |
+| `instalacao_id` | integer FK | → `enel_instalacoes.id` (nullable) |
+| `vencimento` | date | Data de vencimento |
+| `status` | text | `em aberto` \| `pago` \| `vencido` |
+| `codigo_barras` | text | — |
+| `conta_pdf_url` | text | URL do PDF da fatura |
+| `atualizado_em` | timestamp | Auto-atualizado via trigger |
+
+**Índices:** `idx_faturas_vencimento`, `idx_faturas_status`
 
 ---
 
-##  Queries úteis
+### `faturas_ocr`
+Dados extraídos por OCR do PDF da fatura Enel (1-para-1 com `faturas`).
 
-**Pico de corrente por canal:**
-```sql
-SELECT canal_id, MAX(corrente) AS pico
-FROM medicoes
-GROUP BY canal_id
-ORDER BY pico DESC;
-```
+Inclui campos detalhados: cliente, distribuidora, nota fiscal, endereço, leituras do medidor, tarifas TE e TUSD, datas de leitura, etc.
 
-**Alertas ativos (não resolvidos), por prioridade:**
-```sql
-SELECT timestamp, tipo, nivel, canal_id, mensagem
-FROM alertas
-WHERE resolvido = FALSE
-ORDER BY
-    CASE nivel WHEN 'critico' THEN 1 WHEN 'aviso' THEN 2 ELSE 3 END,
-    timestamp DESC;
-```
-
-**Corrente média por quadro:**
-```sql
-SELECT q.nome, ROUND(AVG(m.corrente)::NUMERIC, 2) AS corrente_media
-FROM medicoes m
-JOIN canais_medicao c ON m.canal_id = c.id
-JOIN dispositivos d   ON c.dispositivo_id = d.id
-JOIN quadros q        ON d.quadro_id = q.id
-GROUP BY q.nome
-ORDER BY corrente_media DESC;
-```
-
-**Dispositivos sem leitura há mais de 60 minutos:**
-```sql
-SELECT d.nome, MAX(m.timestamp) AS ultima_leitura
-FROM medicoes m
-JOIN canais_medicao c ON m.canal_id = c.id
-JOIN dispositivos d   ON c.dispositivo_id = d.id
-GROUP BY d.nome
-HAVING MAX(m.timestamp) < NOW() - INTERVAL '60 minutes'
-ORDER BY ultima_leitura;
-```
+**Campos de tarifa:**
+- `preco_te` / `preco_tusd` — valores brutos do OCR
+- `normalizado_preco_te` / `normalizado_preco_tusd` / `normalizado_valor` — valores normalizados após validação
 
 ---
 
-## 📄 Licença
+### `fatura_itens`
+Itens detalhados da composição da fatura (extraídos do OCR).
 
-Projeto acadêmico — Safe Energy • EnergySafe Database
+| Coluna | Tipo | Descrição |
+|---|---|---|
+| `id` | integer PK | — |
+| `fatura_id` | integer FK | → `faturas.id` |
+| `descricao` | text | Ex: "Energia Elétrica", "ICMS" |
+| `valor` | numeric(10,2) | Valor do item em R$ |
+
+---
+
+### `enel_instalacoes`
+Instalações Enel vinculadas a cada local.
+
+| Coluna | Tipo | Descrição |
+|---|---|---|
+| `numero` | text | Número da instalação Enel (ex: `7006123456`) |
+| `titular` | text | Nome do titular da conta |
+| `endereco` | text | Endereço da instalação |
+| `lista_raw` | jsonb | Array completo de instalações do login (para referência) |
+
+---
+
+### `tarifas`
+Histórico de tarifas de energia (R$/kWh) por local e vigência.
+
+| Coluna | Tipo | Descrição |
+|---|---|---|
+| `local_id` | integer FK | → `locais.id` |
+| `valor_kwh` | real | Tarifa em R$/kWh |
+| `vigencia` | date | Data de início da vigência |
+
+**Constraint única:** `(local_id, vigencia)`
+
+---
+
+### `metas`
+Metas de consumo por local ou quadro.
+
+| Coluna | Tipo | Descrição |
+|---|---|---|
+| `local_id` | integer FK | → `locais.id` |
+| `quadro_id` | integer FK | → `quadros.id` |
+| `kwh_baseline` | real | Consumo de referência (antes da meta) |
+| `kwh_meta` | real | Consumo alvo |
+| `data_inicio` | date | — |
+| `data_fim` | date | Nullable — meta em aberto |
+
+---
+
+### `rateio`
+Rateio de custos da fatura por área.
+
+| Coluna | Tipo | Descrição |
+|---|---|---|
+| `fatura_id` | integer FK | → `faturas.id` |
+| `area_id` | integer FK | → `areas.id` |
+| `kwh` | real | kWh atribuídos à área |
+| `percentual` | real | % do consumo total |
+| `valor_rs` | real | Custo em R$ da área |
+
+---
+
+## ⚙️ Triggers
+
+| Trigger | Tabela | Evento | Ação |
+|---|---|---|---|
+| `trg_faturas_atualizado_em` | `faturas` | UPDATE | Atualiza `atualizado_em` |
+| `trg_faturas_ocr_atualizado_em` | `faturas_ocr` | UPDATE | Atualiza `atualizado_em` |
+| `trg_enel_inst_atualizado_em` | `enel_instalacoes` | UPDATE | Atualiza `atualizado_em` |
+
+---
+
+## 📊 Dados de exemplo incluídos
+
+O dump contém **1 linha de exemplo por tabela** (16 no total), suficiente para ilustrar o schema e testar queries sem volume de dados. Os valores são representativos de uma instalação real, mas foram reduzidos intencionalmente para uso público.
+
+---
+
+## 🔗 Relacionado
+
+- [Firmware ESP32 — EnergySafe v3.0](../firmware/) — coleta os dados e envia para a API
+- [Backend API](../backend/) — recebe as medições e alimenta este banco
+
+---
+
+## 📜 Licença
+
+MIT — livre para uso, modificação e distribuição.
