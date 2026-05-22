@@ -368,9 +368,10 @@ async function carregarMedicoesGerais() {
  * Opcionalmente filtra por fase (A, B ou C).
  */
 async function carregarMedicoesPorDispositivo(dispositivoId, fase = null) {
-  const params = { limit: 200 };
+  // Endpoint disponível em produção: GET /medicoes?dispositivo_id=X
+  const params = { dispositivo_id: dispositivoId, limit: 200 };
   if (fase) params.fase = fase;
-  const raw = await getJSON(`/dispositivos/${dispositivoId}/medicoes`, params);
+  const raw = await getJSON("/medicoes", params);
   return asArray(raw).map(adaptMedicao).filter(m => m.valido);
 }
 
