@@ -1,233 +1,240 @@
 # ⚡ EnergySafe — Backend API
 
-API REST para monitoramento energético em tempo real, desenvolvida com **FastAPI** e **PostgreSQL**.  
-Gerencia a hierarquia completa de ativos elétricos e processa alertas automáticos por medição.
+API REST construída com **FastAPI** para a plataforma de monitoramento energético EnergySafe. Recebe medições dos dispositivos ESP32, detecta alertas automaticamente, calcula consumo diário, gerencia faturas com rateio por área e gera relatórios em PDF.
 
-```
-LOCAL → QUADRO → DISPOSITIVO → CANAL → MEDIÇÃO → ALERTA
-```
+> **Deploy:** [backendsafe.onrender.com](https://backendsafe.onrender.com)  
+> **Docs interativas:** [backendsafe.onrender.com/docs](https://backendsafe.onrender.com/docs)
 
 ---
 
-##  Deploy
-
-| Ambiente | URL |
-|---|---|
-| Produção | https://backendsafe.onrender.com |
-| Documentação interativa (Swagger) | https://backendsafe.onrender.com/docs |
-
-> O plano gratuito do Render hiberna após 15 min de inatividade. A primeira requisição pode demorar até 50 segundos para acordar o serviço.
-
----
-
-##  Stack
+## 🏗️ Stack
 
 | Camada | Tecnologia |
 |---|---|
-| Framework | FastAPI 0.135 |
-| ORM | SQLAlchemy 2.0 |
-| Validação | Pydantic v2 |
-| Banco de dados | PostgreSQL 15 |
-| Servidor ASGI | Uvicorn 0.42 |
-| Containerização local | Docker |
-| Deploy | Render (Web Service + PostgreSQL) |
+| Framework | FastAPI 0.100+ |
+| ORM | SQLAlchemy |
+| Banco de dados | PostgreSQL (SSL obrigatório) |
+| Scheduler | APScheduler (job noturno 00:05) |
+| PDF | ReportLab |
+| HTTP client | HTTPX (integração Enel) |
+| Deploy | Render.com |
 
 ---
 
-##  Estrutura do Projeto
+## 📁 Estrutura do projeto
 
 ```
 BackendSafe/
-│
-├── routes/
-│   ├── __init__.py
-│   ├── locais.py
-│   ├── quadros.py
-│   ├── dispositivos.py
-│   ├── canais.py
-│   ├── medicoes.py       ← inclui lógica de alertas automáticos
-│   └── alertas.py
-│
-├── database.py           ← conexão com PostgreSQL via SQLAlchemy
-├── models.py             ← modelos ORM
-├── schemas.py            ← validação de entrada/saída (Pydantic)
-├── main.py               ← inicialização da API e CORS
-├── requirements.txt
-└── README.md
+├── main.py               # App FastAPI, CORS, routers, scheduler
+├── database.py           # Engine SQLAlchemy, SessionLocal, Base
+├── models.py             # Modelos ORM (todas as tabelas)
+├── schemas.py            # Schemas Pydantic (request/response)
+├── enel_client.py        # Cliente HTTP para microserviço Enel SP
+├── persistir_fatura.py   # Lógica de persistência de faturas Enel
+├── requirements.txt      # Dependências
+├── migration/            # Scripts SQL de migração
+└── routes/
+    ├── locais.py         # CRUD de locais físicos
+    ├── areas.py          # CRUD de áreas
+    ├── quadros.py        # CRUD de quadros elétricos
+    ├── dispositivos.py   # CRUD de dispositivos ESP32
+    ├── canais.py         # CRUD de canais de medição
+    ├── medicoes.py       # Ingestão de medições + detecção de alertas
+    ├── alertas.py        # Consulta e resolução de alertas
+    ├── consumo.py        # Consulta de consumo diário agregado
+    ├── faturas.py        # Faturas + cálculo automático de rateio
+    ├── tarifas.py        # Histórico de tarifas (R$/kWh)
+    ├── metas.py          # Metas de consumo
+    ├── jobs.py           # Job de cálculo de kWh (manual + agendado)
+    └── relatorios.py     # Geração de relatório PDF de rateio
 ```
 
 ---
 
-##  Modelagem do Banco
+## 🚀 Como rodar localmente
 
-```
-locais         → nome, andar
-quadros        → local_id, quadro_pai_id (hierárquico)
-dispositivos   → quadro_id, ativo
-canais_medicao → dispositivo_id, fase (A/B/C), tipo
-medicoes       → canal_id, corrente, tensao, potencia, valido, timestamp
-alertas        → canal_id, tipo, nivel, valor, limite, timestamp, resolvido
-```
+### 1. Pré-requisitos
 
-**Índices de performance:**
-- `idx_medicoes_timestamp` — buscas por período
-- `idx_medicoes_canal` — buscas por canal
-- `idx_alertas_timestamp` — ordenação de alertas
+- Python 3.11+
+- PostgreSQL (local ou nuvem, ex: Supabase, Neon)
 
----
-
-##  Desenvolvimento local
-
-> A API já está em produção no Render. O ambiente local é usado apenas para desenvolvimento e testes antes do push.
-
-### Pré-requisitos
-
-- Python 3.10+
-- Docker Desktop
-
-### 1. Clone o repositório
+### 2. Clone e instale as dependências
 
 ```bash
 git clone https://github.com/Julyxdias/BackendSafe.git
 cd BackendSafe
 git checkout Julyxdias-Backend-API
-```
 
-### 2. Crie o ambiente virtual
-
-```bash
 python -m venv venv
-venv\Scripts\activate        # Windows
-# source venv/bin/activate   # Linux/Mac
-```
+source venv/bin/activate  # Windows: venv\Scripts\activate
 
-### 3. Instale as dependências
-
-```bash
 pip install -r requirements.txt
 ```
 
-### 4. Suba o banco local com Docker
+### 3. Configure as variáveis de ambiente
 
-```bash
-docker-compose up -d
+Crie um arquivo `.env` na raiz:
+
+```env
+DATABASE_URL=postgresql://usuario:senha@host:5432/energysafe
 ```
 
-### 5. Inicie a API
+> A conexão com o PostgreSQL exige `sslmode=require`. Para banco local sem SSL, ajuste `database.py` removendo `connect_args`.
+
+### 4. Inicie o servidor
 
 ```bash
 uvicorn main:app --reload
 ```
 
-API local em: `http://localhost:8000`  
-Swagger local em: `http://localhost:8000/docs`
-
-> Qualquer `git push` na branch `Julyxdias-Backend-API` dispara o redeploy automático no Render.
+Acesse: `http://localhost:8000/docs`
 
 ---
 
-##  Variáveis de Ambiente
+## 🗺️ Hierarquia de entidades
 
-| Variável | Descrição | Padrão local |
-|---|---|---|
-| `DATABASE_URL` | URL de conexão PostgreSQL | `postgresql://postgres:SUASENHA@localhost:5432/SEUBANCO` |
-
-Em produção, configure `DATABASE_URL` nas variáveis de ambiente do serviço no Render.  
-Se a URL começar com `postgres://`, o `database.py` corrige automaticamente para `postgresql://`.
+```
+Local
+  └── Área
+  └── Quadro
+        └── Dispositivo (ESP32)
+              └── Canal de Medição (Fase A/B/C)
+                    └── Medição (série temporal)
+                    └── Consumo Diário (kWh agregado)
+                    └── Alerta
+```
 
 ---
 
-##  Endpoints
+## 📡 Endpoints
 
-### Locais
+### Estrutura física
+
 | Método | Rota | Descrição |
 |---|---|---|
-| GET | `/locais` | Lista todos os locais |
-| GET | `/locais/{id}` | Retorna um local |
-| POST | `/locais` | Cria um local |
-| DELETE | `/locais/{id}` | Remove um local |
-
-### Quadros
-| Método | Rota | Descrição |
-|---|---|---|
-| GET | `/quadros?local_id=` | Lista quadros (filtrável por local) |
-| GET | `/quadros/{id}` | Retorna um quadro |
-| POST | `/quadros` | Cria um quadro |
-| DELETE | `/quadros/{id}` | Remove um quadro |
-
-### Dispositivos
-| Método | Rota | Descrição |
-|---|---|---|
-| GET | `/dispositivos?quadro_id=` | Lista dispositivos (filtrável por quadro) |
-| GET | `/dispositivos/{id}` | Retorna um dispositivo |
-| POST | `/dispositivos` | Cria um dispositivo |
-| PATCH | `/dispositivos/{id}/status` | Ativa/desativa um dispositivo |
-| DELETE | `/dispositivos/{id}` | Remove um dispositivo |
-
-### Canais de Medição
-| Método | Rota | Descrição |
-|---|---|---|
-| GET | `/canais?quadro_id=&dispositivo_id=` | Lista canais (filtrável) |
-| GET | `/canais/{id}` | Retorna um canal |
-| POST | `/canais` | Cria um canal |
-| DELETE | `/canais/{id}` | Remove um canal |
+| GET/POST | `/locais/` | Lista ou cria locais |
+| GET/PUT/DELETE | `/locais/{id}` | Detalha, atualiza ou remove |
+| GET/POST | `/areas/` | Lista ou cria áreas |
+| GET/POST | `/quadros/` | Lista ou cria quadros |
+| GET/POST | `/dispositivos/` | Lista ou cria dispositivos |
+| GET/POST | `/canais/` | Lista ou cria canais de medição |
 
 ### Medições
+
 | Método | Rota | Descrição |
 |---|---|---|
-| GET | `/medicoes?canal_id=&inicio=&fim=&valido=` | Lista medições com filtros |
-| GET | `/medicoes/{id}` | Retorna uma medição |
-| POST | `/medicoes` | Insere medição + dispara verificação de alertas |
-| DELETE | `/medicoes/{id}` | Remove uma medição |
+| POST | `/medicoes/` | Recebe medição do ESP32 e dispara verificação de alertas |
+| GET | `/medicoes/` | Lista medições com filtros (canal, período, valido) |
+| GET | `/medicoes/ultimo/{canal_id}` | Última medição de um canal |
+
+**Payload de entrada (ESP32 → API):**
+```json
+{
+  "canal_id": 1,
+  "corrente": 4.83,
+  "tensao": 220.5,
+  "potencia": 1065.0,
+  "valido": true,
+  "timestamp": "2026-05-21T14:32:00Z"
+}
+```
 
 ### Alertas
-| Método | Rota | Descrição |
-|---|---|---|
-| GET | `/alertas?canal_id=&nivel=&tipo=&resolvido=` | Lista alertas com filtros |
-| GET | `/alertas/{id}` | Retorna um alerta |
-| POST | `/alertas` | Cria alerta manual |
-| PATCH | `/alertas/{id}/resolver` | Marca alerta como resolvido |
-| DELETE | `/alertas/{id}` | Remove um alerta |
 
----
-
-##  Sistema de Alertas
-
-Os alertas são gerados automaticamente pelo backend após cada `POST /medicoes`.  
-Nenhum trigger no banco é necessário — a lógica vive em `routes/medicoes.py`.
+Gerados automaticamente a cada medição recebida. Tipos detectados:
 
 | Tipo | Nível | Condição |
 |---|---|---|
-| `sobrecorrente` | `critico` | Corrente > 40A |
-| `consumo_fora_horario` | `aviso` | Corrente > 10A entre 22h e 6h |
-| `queda_brusca` | `aviso` | Corrente caiu abaixo de 30% da leitura anterior |
+| `sobrecorrente` | crítico | corrente > 40 A |
+| `consumo_fora_horario` | aviso | potência > 10 W fora de 06h–22h |
+| `queda_brusca` | crítico | corrente caiu > 70% em relação à anterior |
 
-Os limites são configuráveis no topo de `routes/medicoes.py`:
+| Método | Rota | Descrição |
+|---|---|---|
+| GET | `/alertas/` | Lista alertas (filtros: canal, nível, tipo, resolvido) |
+| PATCH | `/alertas/{id}/resolver` | Marca alerta como resolvido |
 
-```python
-LIMITE_SOBRECORRENTE = 40.0
-LIMITE_FORA_HORARIO  = 10.0
-HORA_INICIO          = 6
-HORA_FIM             = 22
-QUEDA_FATOR          = 0.3
+### Consumo
+
+| Método | Rota | Descrição |
+|---|---|---|
+| GET | `/consumo/` | Consumo diário agregado (filtros: local, quadro, sensor, período) |
+
+### Faturas e Rateio
+
+| Método | Rota | Descrição |
+|---|---|---|
+| POST | `/faturas/` | Cadastra fatura e calcula rateio por área automaticamente |
+| GET | `/faturas/` | Lista faturas |
+| GET | `/faturas/{id}/rateio` | Retorna rateio calculado da fatura |
+
+O rateio é calculado com base no `consumo_diario` de cada canal, agrupado pela área do quadro ao qual o canal pertence.
+
+### Tarifas e Metas
+
+| Método | Rota | Descrição |
+|---|---|---|
+| GET/POST | `/tarifas/` | Histórico de tarifas (R$/kWh) por local e vigência |
+| GET/POST | `/metas/` | Metas de consumo por local ou quadro |
+
+### Jobs
+
+| Método | Rota | Descrição |
+|---|---|---|
+| POST | `/jobs/consumo-diario` | Dispara cálculo de kWh manualmente para uma data |
+
+O job roda automaticamente todo dia às **00:05 (horário de Brasília)** via APScheduler. O cálculo usa **integração trapezoidal**:
+
+```
+kWh = Σ ( (P_i + P_{i+1}) / 2 × Δt_horas ) / 1000
+```
+
+### Relatórios
+
+| Método | Rota | Descrição |
+|---|---|---|
+| GET | `/relatorios/rateio/{fatura_id}` | Gera e retorna PDF de rateio para download |
+
+O PDF é gerado com ReportLab e inclui tabela de rateio por área com kWh, percentual e valor em R$.
+
+---
+
+## 🔔 Integração Enel SP
+
+O `enel_client.py` se comunica com um microserviço Node.js separado para consultar faturas diretamente no portal da Enel SP.
+
+Variáveis de ambiente necessárias:
+
+```env
+ENEL_SERVICE_URL=https://seu-microservico-enel.com
+ENEL_SERVICE_KEY=sua-chave-de-api
 ```
 
 ---
 
-##  Fluxo de dados (produção)
+## 🌐 CORS
+
+Origens permitidas por padrão:
 
 ```
-ESP32 (hardware)
-    ↓  POST /medicoes
-Render — API FastAPI (backendsafe.onrender.com)
-    ↓  verifica alertas automaticamente
-Render — PostgreSQL (energysafe-db)
-    ↑  GET /alertas, GET /medicoes, GET /locais ...
-Vercel — Frontend Safe Energy (energy-safe-9m2q.vercel.app)
+https://energy-safe.vercel.app
+https://energy-safe-9m2q.vercel.app
+http://localhost:5500
+http://127.0.0.1:5500
 ```
+
+Para adicionar origens, edite a lista `allow_origins` em `main.py`.
 
 ---
 
-## 📄 Licença
+## 🔗 Relacionado
 
-Projeto acadêmico — Safe Energy • EnergySafe API v1.0.0
+- [Firmware ESP32 — EnergySafe v3.0](../firmware/) — coleta e envia as medições
+- [Banco de dados (schema SQL)](../database/) — schema PostgreSQL completo
+- [Frontend](https://github.com/Julyxdias/BackendSafe) — interface web (Vercel)
+
+---
+
+## 📜 Licença
+
+MIT — livre para uso, modificação e distribuição.
