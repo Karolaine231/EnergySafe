@@ -116,47 +116,6 @@ def criar_medicao(medicao: schemas.MedicaoCreate, db: Session = Depends(get_db))
 
 @router.get("/", response_model=List[schemas.MedicaoOut])
 def listar_medicoes(
-    canal_id: Optional[int]      = Query(None),
-    inicio:   Optional[datetime] = Query(None),
-    fim:      Optional[datetime] = Query(None),
-    valido:   Optional[bool]     = Query(None),
-    skip:     int                = Query(0, ge=0),
-    limit:    int                = Query(100, le=1000),
-    db: Session = Depends(get_db),
-):
-    query = db.query(models.Medicao)
-
-    if canal_id is not None:
-        query = query.filter(models.Medicao.canal_id == canal_id)
-    if inicio:
-        query = query.filter(models.Medicao.timestamp >= inicio)
-    if fim:
-        query = query.filter(models.Medicao.timestamp <= fim)
-    if valido is not None:
-        query = query.filter(models.Medicao.valido == valido)
-
-    return query.order_by(models.Medicao.timestamp.desc()).offset(skip).limit(limit).all()
-
-
-@router.get("/{medicao_id}", response_model=schemas.MedicaoOut)
-def obter_medicao(medicao_id: int, db: Session = Depends(get_db)):
-    medicao = db.query(models.Medicao).filter(models.Medicao.id == medicao_id).first()
-    if not medicao:
-        raise HTTPException(status_code=404, detail="Medição não encontrada.")
-    return medicao
-
-
-@router.delete("/{medicao_id}", status_code=204)
-def deletar_medicao(medicao_id: int, db: Session = Depends(get_db)):
-    medicao = db.query(models.Medicao).filter(models.Medicao.id == medicao_id).first()
-    if not medicao:
-        raise HTTPException(status_code=404, detail="Medição não encontrada.")
-    db.delete(medicao)
-    db.commit()
-
-
-@router.get("/", response_model=List[schemas.MedicaoOut])
-def listar_medicoes(
     canal_id:       Optional[int]      = Query(None),
     dispositivo_id: Optional[int]      = Query(None),   # ← novo
     fase:           Optional[str]      = Query(None, pattern="^[ABC]$"),  # ← novo
@@ -187,3 +146,21 @@ def listar_medicoes(
         query = query.filter(models.Medicao.valido == valido)
 
     return query.order_by(models.Medicao.timestamp.desc()).offset(skip).limit(limit).all()
+
+
+@router.get("/{medicao_id}", response_model=schemas.MedicaoOut)
+def obter_medicao(medicao_id: int, db: Session = Depends(get_db)):
+    medicao = db.query(models.Medicao).filter(models.Medicao.id == medicao_id).first()
+    if not medicao:
+        raise HTTPException(status_code=404, detail="Medição não encontrada.")
+    return medicao
+
+
+@router.delete("/{medicao_id}", status_code=204)
+def deletar_medicao(medicao_id: int, db: Session = Depends(get_db)):
+    medicao = db.query(models.Medicao).filter(models.Medicao.id == medicao_id).first()
+    if not medicao:
+        raise HTTPException(status_code=404, detail="Medição não encontrada.")
+    db.delete(medicao)
+    db.commit()
+
