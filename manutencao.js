@@ -368,11 +368,14 @@ async function carregarMedicoesGerais() {
  * Opcionalmente filtra por fase (A, B ou C).
  */
 async function carregarMedicoesPorDispositivo(dispositivoId, fase = null) {
-  // Endpoint disponível em produção: GET /medicoes?dispositivo_id=X
+  // Endpoint: GET /medicoes/?dispositivo_id=X (barra final obrigatória)
   const params = { dispositivo_id: dispositivoId, limit: 200 };
   if (fase) params.fase = fase;
-  const raw = await getJSON("/medicoes", params);
-  return asArray(raw).map(adaptMedicao).filter(m => m.valido);
+  const raw = await getJSON("/medicoes/", params);
+  // Aceita registros válidos OU com algum valor de potência/corrente
+  return asArray(raw).map(adaptMedicao).filter(m =>
+    m.valido || m.potencia > 0 || m.corrente > 0
+  );
 }
 
 /**
@@ -672,7 +675,11 @@ function renderGraficoMedicoes(modo) {
  * Pega o último registro válido com algum valor de potência de um array de medições.
  */
 function ultimaMedicaoComPotencia(medicoes) {
-  return medicoes.find(m => m.potencia_ativa !== null || m.potencia > 0) || null;
+  // Prioriza registros com potencia_ativa preenchida
+  const comPotencia = medicoes.find(m => m.potencia_ativa !== null && m.potencia_ativa > 0);
+  if (comPotencia) return comPotencia;
+  // Fallback: qualquer registro com potencia legada ou corrente
+  return medicoes.find(m => m.potencia > 0 || m.corrente > 0) || null;
 }
 
 /**
