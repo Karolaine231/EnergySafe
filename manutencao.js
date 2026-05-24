@@ -4,10 +4,11 @@
 const API_BASE = "https://backendsafe.onrender.com";
 
 // IDs fixos dos 3 ESP32s do prédio → canal_id que vem no JSON
+// canal_id é o único filtro que o backend realmente aplica hoje
 const DISPOSITIVOS_FASES = [
-  { dispositivo_id: 1, label: "Fase A" },
-  { dispositivo_id: 4, label: "Fase B" },
-  { dispositivo_id: 7, label: "Fase C" }
+  { dispositivo_id: 1, canal_id: 1, label: "Fase A" },
+  { dispositivo_id: 4, canal_id: 4, label: "Fase B" },
+  { dispositivo_id: 7, canal_id: 7, label: "Fase C" }
 ];
 
 const TIPO_LABEL = {
@@ -319,6 +320,17 @@ async function carregarQuadros(localId = "") {
   });
 }
 
+// Cache global de TODOS os dispositivos (para KPIs sempre visíveis)
+let todosDispositivosCache = [];
+
+async function carregarTodosDispositivos() {
+  try {
+    todosDispositivosCache = asArray(await getJSON("/dispositivos", { limit: 500 })).map(adaptDispositivo);
+  } catch(e) {
+    console.error("Erro ao carregar todos os dispositivos:", e);
+  }
+}
+
 async function carregarDispositivos(quadroId = "") {
   const select = $("dispositivo"); if (!select) return;
   select.innerHTML = `<option value="">Carregando...</option>`;
@@ -368,11 +380,10 @@ async function carregarMedicoesGerais() {
  * Opcionalmente filtra por fase (A, B ou C).
  */
 async function carregarMedicoesPorDispositivo(dispositivoId, fase = null) {
-  // Endpoint: GET /medicoes/?dispositivo_id=X (barra final obrigatória)
-  const params = { dispositivo_id: dispositivoId, limit: 200 };
-  if (fase) params.fase = fase;
+  // O backend filtra corretamente por canal_id (não por dispositivo_id)
+  // canal_id 1 = Fase A, canal_id 4 = Fase B, canal_id 7 = Fase C
+  const params = { canal_id: dispositivoId, limit: 200 };
   const raw = await getJSON("/medicoes/", params);
-  // Aceita registros válidos OU com algum valor de potência/corrente
   return asArray(raw).map(adaptMedicao).filter(m =>
     m.valido || m.potencia > 0 || m.corrente > 0
   );
@@ -397,7 +408,7 @@ async function carregarDadosPotencia() {
   const resultados = await Promise.all(
     alvos.map(async d => {
       try {
-        const medicoes = await carregarMedicoesPorDispositivo(d.dispositivo_id);
+        const medicoes = await carregarMedicoesPorDispositivo(d.canal_id);
         return { ...d, medicoes };
       } catch {
         return { ...d, medicoes: [] };
@@ -440,8 +451,10 @@ function carregarKPIsETabela() {
   const agrupado = getConsumoAgrupadoPorData();
   const ultimo = agrupado[agrupado.length - 1] || null;
   const alertasAtivos = alertasCache.filter(a => !a.resolvido).length;
-  const ativos   = dispositivosCache.filter(d => d.ativo).length;
-  const inativos = dispositivosCache.filter(d => !d.ativo).length;
+  // KPIs sempre usam TODOS os dispositivos do sistema
+  const fonteKpi = todosDispositivosCache.length ? todosDispositivosCache : dispositivosCache;
+  const ativos   = fonteKpi.filter(d => d.ativo).length;
+  const inativos = fonteKpi.filter(d => !d.ativo).length;
 
   if ($("kpiOnline"))  $("kpiOnline").textContent  = String(ativos);
   if ($("kpiOffline")) $("kpiOffline").textContent = String(inativos);
@@ -452,12 +465,16 @@ function carregarKPIsETabela() {
   if (!tbody) return;
   tbody.innerHTML = "";
 
-  if (!dispositivosCache.length) {
+  // Se nenhum quadro selecionado, usa todos os dispositivos do sistema
+  const fonte = dispositivosCache.length ? dispositivosCache : todosDispositivosCache;
+
+  if (!fonte.length) {
     tbody.innerHTML = `<tr><td colspan="4">Nenhum dispositivo encontrado.</td></tr>`;
     return;
   }
 
-  let lista = [...dispositivosCache];
+  // Filtra por dispositivo se selecionado, senão mostra todos
+  let lista = [...fonte];
   if (dispositivoId) lista = lista.filter(d => String(d.id) === String(dispositivoId));
 
   const totalPeriodo = agrupado.reduce((s,i) => s + i.kwh, 0);
@@ -1059,6 +1076,10 @@ function navegarPara(pageId) {
 
   if ($("pageTitle")) $("pageTitle").textContent = pageTitles[pageId] || pageId;
 
+  // Esconde KPIs globais na página Potência (ela tem seus próprios cards de potência)
+  const kpisBar = $("kpisBar");
+  if (kpisBar) kpisBar.style.display = pageId === "potencia" ? "none" : "";
+
   fecharSidebar();
 
   // Carrega dados ao entrar em cada página
@@ -1094,6 +1115,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     configurarEventosUI();
     configurarExportacoes();
     await carregarLocais();
+    await carregarTodosDispositivos();
     await carregarPainelCompleto();
   } catch (error) {
     console.error(error);
