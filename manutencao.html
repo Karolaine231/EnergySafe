@@ -191,25 +191,21 @@
       <!-- Cards de resumo das 3 fases -->
       <div class="potencia-kpis">
         <div class="pot-card">
-          <div class="pot-icon">⚡</div>
           <div class="pot-label">Potência Ativa Total</div>
           <div class="pot-value" id="potAtivaTot">— <span>W</span></div>
           <div class="pot-sub">Trabalho real consumido</div>
         </div>
         <div class="pot-card">
-          <div class="pot-icon">〜</div>
           <div class="pot-label">Potência Aparente Total</div>
           <div class="pot-value" id="potAparenteTot">— <span>VA</span></div>
           <div class="pot-sub">Produto vetorial I × V</div>
         </div>
         <div class="pot-card">
-          <div class="pot-icon">↻</div>
           <div class="pot-label">Potência Reativa Total</div>
           <div class="pot-value" id="potReativaTot">— <span>VAr</span></div>
           <div class="pot-sub">Componente indutiva/capacitiva</div>
         </div>
         <div class="pot-card pot-card--fp">
-          <div class="pot-icon">◎</div>
           <div class="pot-label">Fator de Potência Médio</div>
           <div class="pot-value" id="fatPotMedio">— <span>cos(ϕ)</span></div>
           <div class="pot-sub">Eficiência da carga</div>
@@ -219,10 +215,6 @@
       <!-- Tabela por fase -->
       <div class="card">
         <div class="card-head">
-          <div>
-            <h2>Leitura por fase</h2>
-            <p>Última medição de cada canal (Fase A = canal 1, B = canal 2, C = canal 3).</p>
-          </div>
           <button class="btn-action primary" id="btnRefreshPotencia" style="width:auto;padding:8px 16px;border-radius:10px;font-size:12px;">↺ Atualizar</button>
         </div>
         <div class="table-wrap">
@@ -250,8 +242,8 @@
       <div class="card">
         <div class="card-head">
           <div>
-            <h2>Evolução temporal</h2>
-            <p>Potência ativa e fator de potência ao longo do tempo.</p>
+            <h2>Comparativo Energético por Fase</h2>
+            <p>Comparação entre potência ativa, aparente e reativa em cada fase monitorada.</p>
           </div>
           <label class="chip">
             Exibir
@@ -268,7 +260,6 @@
             <canvas id="chartPotencia"></canvas>
           </div>
         </div>
-        <div class="chart-hint">Atualizado a cada 10 segundos conforme ciclo do ESP32.</div>
       </div>
 
     </div>
