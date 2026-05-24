@@ -6,9 +6,17 @@ const API_BASE = "https://backendsafe.onrender.com";
 // IDs fixos dos 3 ESP32s do prédio → canal_id que vem no JSON
 // canal_id é o único filtro que o backend realmente aplica hoje
 const DISPOSITIVOS_FASES = [
-  { dispositivo_id: 1, canal_id: 1, label: "Fase A" },
-  { dispositivo_id: 4, canal_id: 4, label: "Fase B" },
-  { dispositivo_id: 7, canal_id: 7, label: "Fase C" }
+  { dispositivo_id: 1, fase: "A", label: "Fase A" },
+  { dispositivo_id: 1, fase: "B", label: "Fase B" },
+  { dispositivo_id: 1, fase: "C", label: "Fase C" },
+
+  { dispositivo_id: 2, fase: "A", label: "Fase A" },
+  { dispositivo_id: 2, fase: "B", label: "Fase B" },
+  { dispositivo_id: 2, fase: "C", label: "Fase C" },
+
+  { dispositivo_id: 3, fase: "A", label: "Fase A" },
+  { dispositivo_id: 3, fase: "B", label: "Fase B" },
+  { dispositivo_id: 3, fase: "C", label: "Fase C" }
 ];
 
 const TIPO_LABEL = {
@@ -382,7 +390,8 @@ async function carregarMedicoesGerais() {
 async function carregarMedicoesPorDispositivo(dispositivoId, fase = null) {
   // O backend filtra corretamente por canal_id (não por dispositivo_id)
   // canal_id 1 = Fase A, canal_id 4 = Fase B, canal_id 7 = Fase C
-  const params = { canal_id: dispositivoId, limit: 200 };
+   
+  const params = {dispositivo_id: dispositivoId,fase: fase,limit: 20};
   const raw = await getJSON("/medicoes/", params);
   return asArray(raw).map(adaptMedicao).filter(m =>
     m.valido || m.potencia > 0 || m.corrente > 0
