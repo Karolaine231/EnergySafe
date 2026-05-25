@@ -360,12 +360,17 @@ async function carregarMedicoesGerais() {
 }
 
 /**
- * Busca medições de um dispositivo filtrando por fase (A, B ou C).
- * GET /medicoes/?dispositivo_id=X&fase=Y&limit=20
- * Retorna apenas registros com algum valor útil.
+ * Mapeamento fixo fase → canal_id conforme o banco de dados.
+ * Canal 1 = Fase A, Canal 2 = Fase B, Canal 3 = Fase C.
+ * A tabela medicoes não possui coluna "fase", então filtramos por canal_id.
+ * GET /medicoes/?canal_id=X&limit=20
  */
+const FASE_CANAL = { A: 1, B: 2, C: 3 };
+
 async function carregarMedicoesPorFase(dispositivoId, fase) {
-  const params = { dispositivo_id: dispositivoId, fase, limit: 20 };
+  const canalId = FASE_CANAL[fase];
+  if (!canalId) return [];
+  const params = { canal_id: canalId, limit: 20 };
   const raw = await getJSON("/medicoes/", params);
   return asArray(raw).map(adaptMedicao).filter(m =>
     m.valido || m.potencia > 0 || m.corrente > 0
@@ -376,7 +381,7 @@ async function carregarMedicoesPorFase(dispositivoId, fase) {
  * Carrega fases do dispositivo selecionado no filtro dedicado da página de Potência.
  * Prioridade: selDispositivoPotencia → filtro global → primeiro da lista → id=1.
  * Se uma fase específica for selecionada em selFasePotencia, busca só ela.
- * GET /medicoes/?dispositivo_id=X&fase=A|B|C&limit=20
+ * Internamente usa canal_id (A→1, B→2, C→3) pois a tabela medicoes não tem coluna fase.
  */
 async function carregarDadosPotencia() {
   const selDisp = $("selDispositivoPotencia");
