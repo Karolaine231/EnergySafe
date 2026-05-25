@@ -348,7 +348,10 @@ async function carregarConsumo() {
 }
 
 async function carregarAlertasAPI() {
-  alertasCache = asArray(await getJSON("/alertas", { skip:0, limit:500 }))
+  const dispositivoId = $("dispositivo")?.value || "";
+  const params = { limit: 500 };
+  if (dispositivoId) params.dispositivo_id = dispositivoId;
+  alertasCache = asArray(await getJSON("/alertas/", params))
     .map(adaptAlerta)
     .sort((a,b) => new Date(normalizeTimestamp(b.timestamp)) - new Date(normalizeTimestamp(a.timestamp)));
   return alertasCache;
