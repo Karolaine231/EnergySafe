@@ -377,7 +377,8 @@ async function carregarMedicoesPorCanal(canalId) {
 function preencherSelDispositivoPotencia() {
   const sel = $("selDispositivoPotencia"); if (!sel) return;
   const valorAtual = sel.value;
-  sel.innerHTML = `<option value="">Selecione o dispositivo</option>`;
+  // "Todos os dispositivos" é a opção padrão (value="")
+  sel.innerHTML = `<option value="">Todos os dispositivos</option>`;
   todosDispositivosCache.forEach(d => {
     const o = document.createElement("option");
     o.value = d.id;
@@ -385,74 +386,44 @@ function preencherSelDispositivoPotencia() {
     sel.appendChild(o);
   });
   if (valorAtual) sel.value = valorAtual;
-  if (!sel.value && todosDispositivosCache.length) {
-    const primeiroAtivo = todosDispositivosCache.find(d => d.ativo) || todosDispositivosCache[0];
-    if (primeiroAtivo) sel.value = primeiroAtivo.id;
-  }
 }
 
 /**
- * Carrega os canais do dispositivo selecionado e as medições de cada um.
- *
- * Fluxo:
- *   1. GET /canais/?dispositivo_id=X  → lista de canais (cada canal = uma fase)
- *   2. Para cada canal: GET /medicoes/?canal_id=Y&limit=20
- *
- * Se uma fase específica estiver selecionada em #selFasePotencia,
- * filtra apenas o canal cujo índice (0=A, 1=B, 2=C) corresponda à fase.
+ * Busca os canais de um único dispositivo e retorna as fases com medições.
  */
-async function carregarDadosPotencia() {
-  const selDisp = $("selDispositivoPotencia");
-  const selFase = $("selFasePotencia");
+async function carregarFasesDeDispositivo(dispositivoId, faseSelecionada) {
+  const LETRAS = ["A", "B", "C"];
+  const FASE_INDEX = { A: 0, B: 1, C: 2 };
 
-  const dispositivoId = Number(
-    selDisp?.value || $("dispositivo")?.value || todosDispositivosCache[0]?.id || 1
-  );
-
-  // Atualiza subtítulo
-  const nomeDisp = todosDispositivosCache.find(d => d.id === dispositivoId)?.nome
-    || selDisp?.selectedOptions?.[0]?.textContent
-    || `Dispositivo ${dispositivoId}`;
-  const faseSelecionada = selFase?.value || "";
-  const labelFase = faseSelecionada ? `Fase ${faseSelecionada}` : "Todas as fases";
-  const subtitulo = $("potenciaSubtitulo");
-  if (subtitulo) subtitulo.textContent = `${nomeDisp} · ${labelFase}`;
-
-  // 1. Busca canais do dispositivo
   let canais = [];
   try {
     canais = asArray(await getJSON("/canais/", { dispositivo_id: dispositivoId }));
   } catch (e) {
-    console.warn("Erro ao buscar canais:", e);
+    console.warn(`Canais do dispositivo ${dispositivoId}:`, e);
   }
 
-  // Fallback: sem canais, tenta medições diretas pelo dispositivo
   if (!canais.length) {
-    console.warn(`Nenhum canal para dispositivo ${dispositivoId}. Usando fallback.`);
+    // Fallback: medições diretas pelo dispositivo
     try {
       const raw = await getJSON("/medicoes/", { dispositivo_id: dispositivoId, limit: 60 });
       const medicoes = asArray(raw).map(adaptMedicao).filter(m =>
         m.valido || m.potencia > 0 || m.corrente > 0
       );
-      return [{ dispositivo_id: dispositivoId, fase: "A", label: "Fase A", medicoes }];
-    } catch {
-      return [];
-    }
+      return [{ dispositivo_id: dispositivoId, canal_id: null, fase: "A", label: "Fase A", medicoes }];
+    } catch { return []; }
   }
 
-  // 2. Filtra por fase se selecionada (A=índice 0, B=1, C=2)
-  const FASE_INDEX = { A: 0, B: 1, C: 2 };
   const canaisFiltrados = faseSelecionada
     ? canais.filter((_, i) => i === (FASE_INDEX[faseSelecionada] ?? i))
     : canais;
 
-  // 3. Busca medições de cada canal em paralelo
-  const LETRAS = ["A", "B", "C"];
-  const fases = await Promise.all(
+  const nomeDisp = todosDispositivosCache.find(d => d.id === dispositivoId)?.nome || `Disp ${dispositivoId}`;
+
+  return Promise.all(
     canaisFiltrados.map(async (canal, i) => {
       const canalId = canal.id ?? canal.canal_id;
       const fase = faseSelecionada || LETRAS[canais.indexOf(canal)] || LETRAS[i];
-      const label = canal.nome || canal.descricao || `Fase ${fase}`;
+      const label = `${nomeDisp} Fase ${fase}`;
       try {
         const medicoes = await carregarMedicoesPorCanal(canalId);
         return { dispositivo_id: dispositivoId, canal_id: canalId, fase, label, medicoes };
@@ -461,8 +432,48 @@ async function carregarDadosPotencia() {
       }
     })
   );
+}
 
-  return fases;
+/**
+ * Carrega dados de potência.
+ *
+ * - Sem dispositivo selecionado → busca todos os dispositivos, soma tudo nos KPIs,
+ *   exibe uma linha por fase por dispositivo na tabela.
+ * - Com dispositivo selecionado → busca só aquele dispositivo.
+ * - Com fase selecionada → filtra pelo índice do canal (0=A, 1=B, 2=C).
+ */
+async function carregarDadosPotencia() {
+  const selDisp = $("selDispositivoPotencia");
+  const selFase = $("selFasePotencia");
+
+  const dispositivoIdSel = selDisp?.value ? Number(selDisp.value) : null;
+  const faseSelecionada  = selFase?.value || "";
+
+  // Atualiza subtítulo
+  const subtitulo = $("potenciaSubtitulo");
+  if (subtitulo) {
+    const nomeDisp = dispositivoIdSel
+      ? (todosDispositivosCache.find(d => d.id === dispositivoIdSel)?.nome || `Dispositivo ${dispositivoIdSel}`)
+      : "Todos os dispositivos";
+    const labelFase = faseSelecionada ? `Fase ${faseSelecionada}` : "Todas as fases";
+    subtitulo.textContent = `${nomeDisp} · ${labelFase}`;
+  }
+
+  if (dispositivoIdSel) {
+    // ── Um dispositivo específico ──
+    return carregarFasesDeDispositivo(dispositivoIdSel, faseSelecionada);
+  }
+
+  // ── Todos os dispositivos ──
+  const dispositivos = todosDispositivosCache.length
+    ? todosDispositivosCache
+    : asArray(await getJSON("/dispositivos/", { limit: 500 })).map(adaptDispositivo);
+
+  const todasFases = await Promise.all(
+    dispositivos.map(d => carregarFasesDeDispositivo(d.id, faseSelecionada).catch(() => []))
+  );
+
+  return todasFases.flat();
 }
 
 
