@@ -3,21 +3,9 @@
 ══════════════════════════════════════ */
 const API_BASE = "https://backendsafe.onrender.com";
 
-// IDs fixos dos 3 ESP32s do prédio → canal_id que vem no JSON
-// canal_id é o único filtro que o backend realmente aplica hoje
-const DISPOSITIVOS_FASES = [
-  { dispositivo_id: 1, fase: "A", label: "Fase A" },
-  { dispositivo_id: 1, fase: "B", label: "Fase B" },
-  { dispositivo_id: 1, fase: "C", label: "Fase C" },
-
-  { dispositivo_id: 2, fase: "A", label: "Fase A" },
-  { dispositivo_id: 2, fase: "B", label: "Fase B" },
-  { dispositivo_id: 2, fase: "C", label: "Fase C" },
-
-  { dispositivo_id: 3, fase: "A", label: "Fase A" },
-  { dispositivo_id: 3, fase: "B", label: "Fase B" },
-  { dispositivo_id: 3, fase: "C", label: "Fase C" }
-];
+// Fases por dispositivo — dispositivo_id 1, 2 e 3
+const FASES = ["A", "B", "C"];
+const DISPOSITIVOS_IDS = [1, 2, 3];
 
 const TIPO_LABEL = {
   queda_brusca: "Queda brusca",
@@ -28,10 +16,9 @@ const TIPO_LABEL = {
 const NIVEL_LABEL = { critico: "Crítico", aviso: "Aviso", info: "Informativo" };
 const NIVEL_CLASS = { critico: "danger", aviso: "warn", info: "" };
 
-// Cores dos gráficos de potência (azul, roxo, verde)
-const COR_ATIVA    = { bg: "rgba(56,189,248,0.75)",   border: "rgba(56,189,248,1)"   }; // azul
-const COR_APARENTE = { bg: "rgba(139,92,246,0.75)",   border: "rgba(139,92,246,1)"   }; // roxo
-const COR_REATIVA  = { bg: "rgba(34,197,94,0.75)",    border: "rgba(34,197,94,1)"    }; // verde
+const COR_ATIVA    = { bg: "rgba(56,189,248,0.75)",  border: "rgba(56,189,248,1)"  };
+const COR_APARENTE = { bg: "rgba(139,92,246,0.75)",  border: "rgba(139,92,246,1)"  };
+const COR_REATIVA  = { bg: "rgba(34,197,94,0.75)",   border: "rgba(34,197,94,1)"   };
 
 /* ══════════════════════════════════════
    HELPERS GERAIS
@@ -153,21 +140,19 @@ function formatNivel(nivel) {
 /* ══════════════════════════════════════
    ESTADO GLOBAL
 ══════════════════════════════════════ */
-let chartW         = null;
-let chartMedicoes  = null;
-let chartPotencia  = null; // gráfico de barras agrupadas por fase
-let chartPotTemporal = null; // gráfico temporal de potência
+let chartW           = null;
+let chartMedicoes    = null;
+let chartPotencia    = null;
+let chartPotTemporal = null;
 
-let locaisCache       = [];
-let quadrosCache      = [];
-let dispositivosCache = [];
-let consumoCache      = [];
-let alertasCache      = [];
-let eventosCache      = [];
-let medicoesCache     = [];
-
-// Cache dos dados de potência por fase (dispositivo_id → array de medições)
-let potenciaCache = { 1: [], 4: [], 7: [] };
+let locaisCache           = [];
+let quadrosCache          = [];
+let dispositivosCache     = [];
+let todosDispositivosCache = [];
+let consumoCache          = [];
+let alertasCache          = [];
+let eventosCache          = [];
+let medicoesCache         = [];
 
 /* ══════════════════════════════════════
    ADAPTADORES
@@ -216,22 +201,17 @@ function adaptAlerta(item) {
   };
 }
 
-/**
- * Adapta uma medição da API.
- * Fallback: se potencia_ativa for null, usa potencia (campo legado).
- * Fallback: se fator_potencia for null e tiver P e S, calcula P/S.
- */
 function adaptMedicao(item) {
-  const potencia         = Number(pick(item,"potencia") || 0);
-  let potencia_ativa     = pick(item,"potencia_ativa");
-  let potencia_aparente  = pick(item,"potencia_aparente");
+  const potencia        = Number(pick(item,"potencia") || 0);
+  let potencia_ativa    = pick(item,"potencia_ativa");
+  let potencia_aparente = pick(item,"potencia_aparente");
   const potencia_reativa = pick(item,"potencia_reativa");
-  let fator_potencia     = pick(item,"fator_potencia");
+  let fator_potencia    = pick(item,"fator_potencia");
 
   // Fallback: potencia_ativa ← potencia (legado)
   if (potencia_ativa === null && potencia > 0) potencia_ativa = potencia;
 
-  // Fallback: fator_potencia calculado
+  // Fallback: fator_potencia calculado P/S
   if (fator_potencia === null && potencia_ativa && potencia_aparente && potencia_aparente > 0) {
     fator_potencia = Math.min(potencia_ativa / potencia_aparente, 1.0);
   }
@@ -245,7 +225,7 @@ function adaptMedicao(item) {
     potencia_ativa:    potencia_ativa    !== null ? Number(potencia_ativa)    : null,
     potencia_aparente: potencia_aparente !== null ? Number(potencia_aparente) : null,
     potencia_reativa:  potencia_reativa  !== null ? Number(potencia_reativa)  : null,
-    fator_potencia:    fator_potencia    !== null ? Number(fator_potencia)     : null,
+    fator_potencia:    fator_potencia    !== null ? Number(fator_potencia)    : null,
     valido: pick(item,"valido") !== false,
     timestamp: normalizeTimestamp(pick(item,"timestamp","created_at","criado_em"))
   };
@@ -328,9 +308,6 @@ async function carregarQuadros(localId = "") {
   });
 }
 
-// Cache global de TODOS os dispositivos (para KPIs sempre visíveis)
-let todosDispositivosCache = [];
-
 async function carregarTodosDispositivos() {
   try {
     todosDispositivosCache = asArray(await getJSON("/dispositivos", { limit: 500 })).map(adaptDispositivo);
@@ -357,11 +334,11 @@ async function carregarDispositivos(quadroId = "") {
 }
 
 async function carregarConsumo() {
-  const localId      = $("local")?.value || "";
-  const quadroId     = $("quadro")?.value || "";
-  const sensorId     = $("dispositivo")?.value || "";
+  const localId  = $("local")?.value  || "";
+  const quadroId = $("quadro")?.value || "";
+  const sensorId = $("dispositivo")?.value || "";
   const params = { skip:0, limit:500 };
-  if (sensorId)     params.sensor_id = sensorId;
+  if (sensorId)      params.sensor_id = sensorId;
   else if (quadroId) params.quadro_id = quadroId;
   else if (localId)  params.local_id  = localId;
   const raw = await getJSON("/consumo", params);
@@ -378,20 +355,17 @@ async function carregarAlertasAPI() {
 }
 
 async function carregarMedicoesGerais() {
-  medicoesCache = asArray(await getJSON("/medicoes", { limit:500 })).map(adaptMedicao);
+  medicoesCache = asArray(await getJSON("/medicoes/", { limit:500 })).map(adaptMedicao);
   return medicoesCache;
 }
 
 /**
- * Busca medições por dispositivo usando o endpoint correto:
- * GET /dispositivos/{dispositivo_id}/medicoes
- * Opcionalmente filtra por fase (A, B ou C).
+ * Busca medições de um dispositivo filtrando por fase (A, B ou C).
+ * GET /medicoes/?dispositivo_id=X&fase=Y&limit=20
+ * Retorna apenas registros com algum valor útil.
  */
-async function carregarMedicoesPorDispositivo(dispositivoId, fase = null) {
-  // O backend filtra corretamente por canal_id (não por dispositivo_id)
-  // canal_id 1 = Fase A, canal_id 4 = Fase B, canal_id 7 = Fase C
-   
-  const params = {dispositivo_id: dispositivoId,fase: fase,limit: 20};
+async function carregarMedicoesPorFase(dispositivoId, fase) {
+  const params = { dispositivo_id: dispositivoId, fase, limit: 20 };
   const raw = await getJSON("/medicoes/", params);
   return asArray(raw).map(adaptMedicao).filter(m =>
     m.valido || m.potencia > 0 || m.corrente > 0
@@ -399,37 +373,30 @@ async function carregarMedicoesPorDispositivo(dispositivoId, fase = null) {
 }
 
 /**
- * Carrega medições dos 3 dispositivos (Fases A, B, C) em paralelo.
- * Filtra só registros válidos e com algum valor de potência.
- * Usa `dispositivo_id` definido em DISPOSITIVOS_FASES.
- * 
- * Se o filtro de dispositivo estiver ativo na sidebar, usa só aquele.
+ * Carrega as 3 fases (A, B, C) do dispositivo selecionado no filtro.
+ * Se nenhum dispositivo selecionado, usa o primeiro da lista (dispositivo_id=1).
+ * Cada fase é buscada em: GET /medicoes/?dispositivo_id=X&fase=A|B|C
  */
 async function carregarDadosPotencia() {
+  // Dispositivo selecionado no filtro, ou o primeiro disponível (id=1)
   const dispositivoFiltro = $("dispositivo")?.value || "";
+  const dispositivoId = dispositivoFiltro
+    ? Number(dispositivoFiltro)
+    : (todosDispositivosCache[0]?.id ?? 1);
 
-  // Define quais dispositivos buscar
-  const alvos = dispositivoFiltro
-    ? DISPOSITIVOS_FASES.filter(d => String(d.dispositivo_id) === String(dispositivoFiltro))
-    : DISPOSITIVOS_FASES;
-
-  // Busca em paralelo
-  const resultados = await Promise.all(
-    alvos.map(async d => {
+  // Busca as 3 fases em paralelo para o dispositivo selecionado
+  const fases = await Promise.all(
+    FASES.map(async fase => {
       try {
-        const medicoes = await carregarMedicoesPorDispositivo(d.canal_id);
-        return { ...d, medicoes };
+        const medicoes = await carregarMedicoesPorFase(dispositivoId, fase);
+        return { dispositivo_id: dispositivoId, fase, label: `Fase ${fase}`, medicoes };
       } catch {
-        return { ...d, medicoes: [] };
+        return { dispositivo_id: dispositivoId, fase, label: `Fase ${fase}`, medicoes: [] };
       }
     })
   );
 
-  // Salva no cache
-  potenciaCache = { 1: [], 4: [], 7: [] };
-  resultados.forEach(r => { potenciaCache[r.dispositivo_id] = r.medicoes; });
-
-  return resultados;
+  return fases;
 }
 
 /* ══════════════════════════════════════
@@ -460,6 +427,7 @@ function carregarKPIsETabela() {
   const agrupado = getConsumoAgrupadoPorData();
   const ultimo = agrupado[agrupado.length - 1] || null;
   const alertasAtivos = alertasCache.filter(a => !a.resolvido).length;
+
   // KPIs sempre usam TODOS os dispositivos do sistema
   const fonteKpi = todosDispositivosCache.length ? todosDispositivosCache : dispositivosCache;
   const ativos   = fonteKpi.filter(d => d.ativo).length;
@@ -594,12 +562,12 @@ function renderGraficoMisto(labels, valores, labelBarra, labelLinha, sufixo = ""
       labels,
       datasets: [
         {
-          type: "bar", label: labelBarra, data: valores,
+          type:"bar", label:labelBarra, data:valores,
           borderWidth:1, borderRadius:4,
           backgroundColor:"rgba(59,130,246,0.35)", borderColor:"rgba(59,130,246,0.9)"
         },
         {
-          type: "line", label: labelLinha, data: valores,
+          type:"line", label:labelLinha, data:valores,
           borderColor:"rgba(56,189,248,1)", backgroundColor:"rgba(56,189,248,1)",
           borderWidth:2, pointRadius:4, pointHoverRadius:6,
           pointBackgroundColor:"rgba(56,189,248,1)", pointBorderColor:"#ffffff",
@@ -648,8 +616,8 @@ function renderGraficoConsumoPorDispositivo() {
 
 async function carregarGraficoPrincipal() {
   const modo = $("chartMode")?.value || "consumo_geral";
-  if (modo === "consumo_geral")       renderGraficoConsumoGeral();
-  else if (modo === "consumo_dispositivo") renderGraficoConsumoPorDispositivo();
+  if (modo === "consumo_geral") renderGraficoConsumoGeral();
+  else renderGraficoConsumoPorDispositivo();
 }
 
 /* ══════════════════════════════════════
@@ -694,26 +662,16 @@ function renderGraficoMedicoes(modo) {
 }
 
 /* ══════════════════════════════════════
-   PÁGINA DE POTÊNCIA ← NOVA
+   PÁGINA DE POTÊNCIA
 ══════════════════════════════════════ */
-
-/**
- * Pega o último registro válido com algum valor de potência de um array de medições.
- */
 function ultimaMedicaoComPotencia(medicoes) {
-  // Prioriza registros com potencia_ativa preenchida
   const comPotencia = medicoes.find(m => m.potencia_ativa !== null && m.potencia_ativa > 0);
   if (comPotencia) return comPotencia;
-  // Fallback: qualquer registro com potencia legada ou corrente
   return medicoes.find(m => m.potencia > 0 || m.corrente > 0) || null;
 }
 
-/**
- * Preenche os 4 cards de resumo (totais das 3 fases).
- */
 function preencherCardsPotencia(fases) {
   let totalAtiva = 0, totalAparente = 0, totalReativa = 0, someFP = 0, countFP = 0;
-
   fases.forEach(f => {
     const m = ultimaMedicaoComPotencia(f.medicoes);
     if (!m) return;
@@ -722,47 +680,30 @@ function preencherCardsPotencia(fases) {
     totalReativa  += m.potencia_reativa  ?? 0;
     if (m.fator_potencia !== null) { someFP += m.fator_potencia; countFP++; }
   });
-
   const fpMedio = countFP > 0 ? (someFP / countFP).toFixed(3) : "—";
-
-  const elAtiva     = $("potAtivaTot");
-  const elAparente  = $("potAparenteTot");
-  const elReativa   = $("potReativaTot");
-  const elFP        = $("fatPotMedio");
-
-  if (elAtiva)    elAtiva.innerHTML    = `${totalAtiva.toFixed(0)} <span>W</span>`;
-  if (elAparente) elAparente.innerHTML = `${totalAparente.toFixed(0)} <span>VA</span>`;
-  if (elReativa)  elReativa.innerHTML  = `${totalReativa.toFixed(0)} <span>VAr</span>`;
-  if (elFP)       elFP.innerHTML       = `${fpMedio} <span>cos(ϕ)</span>`;
+  if ($("potAtivaTot"))   $("potAtivaTot").innerHTML   = `${totalAtiva.toFixed(0)} <span>W</span>`;
+  if ($("potAparenteTot")) $("potAparenteTot").innerHTML = `${totalAparente.toFixed(0)} <span>VA</span>`;
+  if ($("potReativaTot")) $("potReativaTot").innerHTML  = `${totalReativa.toFixed(0)} <span>VAr</span>`;
+  if ($("fatPotMedio"))   $("fatPotMedio").innerHTML   = `${fpMedio} <span>cos(ϕ)</span>`;
 }
 
-/**
- * Preenche a tabela de leitura por fase com o último registro de cada dispositivo.
- */
 function preencherTabelaFases(fases) {
   const tbody = $("tbodyFases"); if (!tbody) return;
   tbody.innerHTML = "";
-
   if (!fases.length || fases.every(f => !f.medicoes.length)) {
     tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:rgba(234,240,255,.45)">Nenhuma medição encontrada. Verifique a conexão dos dispositivos.</td></tr>`;
     return;
   }
-
   fases.forEach(f => {
     const m = ultimaMedicaoComPotencia(f.medicoes);
     const tr = document.createElement("tr");
-
     if (!m) {
-      tr.innerHTML = `
-        <td><strong>${f.label}</strong></td>
-        <td colspan="7" style="color:rgba(234,240,255,.45)">Sem dados recentes</td>
-      `;
+      tr.innerHTML = `<td><strong>${f.label}</strong></td><td colspan="7" style="color:rgba(234,240,255,.45)">Sem dados recentes</td>`;
     } else {
       const ativa    = m.potencia_ativa    ?? m.potencia ?? 0;
       const aparente = m.potencia_aparente ?? m.potencia ?? 0;
       const reativa  = m.potencia_reativa  ?? 0;
       const fp       = m.fator_potencia    !== null ? m.fator_potencia.toFixed(3) : "—";
-
       tr.innerHTML = `
         <td><strong>${f.label}</strong></td>
         <td>${m.corrente.toFixed(2)} A</td>
@@ -778,138 +719,71 @@ function preencherTabelaFases(fases) {
   });
 }
 
-/**
- * Gráfico de barras agrupadas por fase: Ativa (azul), Aparente (roxo), Reativa (verde).
- * Igual ao do documento.
- */
 function renderGraficoBarrasFases(fases) {
   const ctx = $("chartPotencia"); if (!ctx) return;
   if (chartPotencia) { chartPotencia.destroy(); chartPotencia = null; }
-
   const labels = fases.map(f => f.label);
-
   const dadosAtiva    = fases.map(f => { const m = ultimaMedicaoComPotencia(f.medicoes); return m ? (m.potencia_ativa ?? m.potencia ?? 0) : 0; });
   const dadosAparente = fases.map(f => { const m = ultimaMedicaoComPotencia(f.medicoes); return m ? (m.potencia_aparente ?? m.potencia ?? 0) : 0; });
   const dadosReativa  = fases.map(f => { const m = ultimaMedicaoComPotencia(f.medicoes); return m ? (m.potencia_reativa ?? 0) : 0; });
-
   chartPotencia = new Chart(ctx, {
     type: "bar",
     data: {
       labels,
       datasets: [
-        {
-          label: "Ativa (W)",
-          data: dadosAtiva,
-          backgroundColor: COR_ATIVA.bg,
-          borderColor: COR_ATIVA.border,
-          borderWidth: 1, borderRadius: 6
-        },
-        {
-          label: "Aparente (VA)",
-          data: dadosAparente,
-          backgroundColor: COR_APARENTE.bg,
-          borderColor: COR_APARENTE.border,
-          borderWidth: 1, borderRadius: 6
-        },
-        {
-          label: "Reativa (VAr)",
-          data: dadosReativa,
-          backgroundColor: COR_REATIVA.bg,
-          borderColor: COR_REATIVA.border,
-          borderWidth: 1, borderRadius: 6
-        }
+        { label:"Ativa (W)",      data:dadosAtiva,    backgroundColor:COR_ATIVA.bg,    borderColor:COR_ATIVA.border,    borderWidth:1, borderRadius:6 },
+        { label:"Aparente (VA)",  data:dadosAparente, backgroundColor:COR_APARENTE.bg, borderColor:COR_APARENTE.border, borderWidth:1, borderRadius:6 },
+        { label:"Reativa (VAr)",  data:dadosReativa,  backgroundColor:COR_REATIVA.bg,  borderColor:COR_REATIVA.border,  borderWidth:1, borderRadius:6 }
       ]
     },
     options: {
-      responsive: true, maintainAspectRatio: false,
+      responsive:true, maintainAspectRatio:false,
       plugins: {
-        legend: {
-          display: true,
-          labels: { color:"rgba(234,240,255,.85)", boxWidth:14, font:{ size:12 } }
-        },
-        tooltip: {
-          callbacks: {
-            label: ctx => ` ${ctx.dataset.label}: ${Number(ctx.parsed.y).toFixed(0)}`
-          }
-        }
+        legend: { display:true, labels:{ color:"rgba(234,240,255,.85)", boxWidth:14, font:{size:12} } },
+        tooltip: { callbacks: { label: ctx => ` ${ctx.dataset.label}: ${Number(ctx.parsed.y).toFixed(0)}` } }
       },
       scales: {
-        x: {
-          ticks: { color:"rgba(234,240,255,.70)", font:{ size:13, weight:"600" } },
-          grid: { color:"rgba(255,255,255,.05)" }
-        },
-        y: {
-          beginAtZero: true,
-          ticks: { color:"rgba(234,240,255,.65)" },
-          grid: { color:"rgba(255,255,255,.06)" }
-        }
+        x: { ticks:{ color:"rgba(234,240,255,.70)", font:{size:13, weight:"600"} }, grid:{ color:"rgba(255,255,255,.05)" } },
+        y: { beginAtZero:true, ticks:{ color:"rgba(234,240,255,.65)" }, grid:{ color:"rgba(255,255,255,.06)" } }
       }
     }
   });
 }
 
-/**
- * Gráfico temporal de potência — mostra evolução do campo selecionado ao longo do tempo
- * para cada fase (3 linhas).
- */
 function renderGraficoTemporalPotencia(fases) {
   const ctx = $("chartPotTemporal"); if (!ctx) return;
   if (chartPotTemporal) { chartPotTemporal.destroy(); chartPotTemporal = null; }
-
   const campo = $("chartModePotencia")?.value || "potencia_ativa";
-  const sufixoMap = {
-    potencia_ativa:"W", potencia_aparente:"VA", potencia_reativa:"VAr", fator_potencia:""
-  };
+  const sufixoMap = { potencia_ativa:"W", potencia_aparente:"VA", potencia_reativa:"VAr", fator_potencia:"" };
   const sufixo = sufixoMap[campo] || "";
-
   const cores = [COR_ATIVA, COR_APARENTE, COR_REATIVA];
-
-  // Coleta todos os timestamps únicos ordenados das 3 fases
   const allTs = new Set();
   fases.forEach(f => f.medicoes.forEach(m => { if (m.timestamp) allTs.add(m.timestamp); }));
-  const labels = [...allTs].sort().slice(-30).map(ts => {
-    const d = new Date(ts);
-    return d.toLocaleTimeString("pt-BR", { hour:"2-digit", minute:"2-digit" });
-  });
   const tsOrdenados = [...allTs].sort().slice(-30);
-
+  const labels = tsOrdenados.map(ts => new Date(ts).toLocaleTimeString("pt-BR", { hour:"2-digit", minute:"2-digit" }));
   const datasets = fases.map((f, i) => {
-    const mapaValores = new Map(f.medicoes.map(m => [m.timestamp, m]));
+    const mapa = new Map(f.medicoes.map(m => [m.timestamp, m]));
     const dados = tsOrdenados.map(ts => {
-      const m = mapaValores.get(ts);
+      const m = mapa.get(ts);
       if (!m) return null;
-      // fallback para campo legado se potencia_ativa for null
       if (campo === "potencia_ativa" && m.potencia_ativa === null) return m.potencia || null;
       return m[campo] ?? null;
     });
     return {
-      label: f.label,
-      data: dados,
+      label: f.label, data: dados,
       borderColor: cores[i].border,
       backgroundColor: cores[i].bg.replace("0.75","0.15"),
-      borderWidth: 2,
-      pointRadius: 3,
-      pointHoverRadius: 5,
-      tension: 0.3,
-      fill: false,
-      spanGaps: true
+      borderWidth:2, pointRadius:3, pointHoverRadius:5, tension:0.3, fill:false, spanGaps:true
     };
   });
-
   chartPotTemporal = new Chart(ctx, {
-    type: "line",
+    type:"line",
     data: { labels, datasets },
     options: {
-      responsive: true, maintainAspectRatio: false,
+      responsive:true, maintainAspectRatio:false,
       plugins: {
         legend: { display:true, labels:{ color:"rgba(234,240,255,.85)", boxWidth:12 } },
-        tooltip: {
-          callbacks: {
-            label: ctx => ctx.parsed.y !== null
-              ? ` ${ctx.dataset.label}: ${Number(ctx.parsed.y).toFixed(2)} ${sufixo}`
-              : ` ${ctx.dataset.label}: —`
-          }
-        }
+        tooltip: { callbacks: { label: ctx => ctx.parsed.y !== null ? ` ${ctx.dataset.label}: ${Number(ctx.parsed.y).toFixed(2)} ${sufixo}` : ` ${ctx.dataset.label}: —` } }
       },
       scales: {
         x: { ticks:{ color:"rgba(234,240,255,.60)", maxRotation:45 }, grid:{ color:"rgba(255,255,255,.05)" } },
@@ -919,9 +793,6 @@ function renderGraficoTemporalPotencia(fases) {
   });
 }
 
-/**
- * Carrega e renderiza toda a página de potência.
- */
 async function carregarPaginaPotencia() {
   setButtonLoading($("btnRefreshPotencia"), true);
   try {
@@ -942,8 +813,8 @@ async function carregarPaginaPotencia() {
    PAINEL COMPLETO
 ══════════════════════════════════════ */
 function atualizarSubtitulo() {
-  const localText      = $("local")?.selectedOptions?.[0]?.textContent || "-";
-  const quadroText     = $("quadro")?.selectedOptions?.[0]?.textContent || "-";
+  const localText       = $("local")?.selectedOptions?.[0]?.textContent || "-";
+  const quadroText      = $("quadro")?.selectedOptions?.[0]?.textContent || "-";
   const dispositivoText = $("dispositivo")?.selectedOptions?.[0]?.textContent || "Todos os dispositivos";
   if ($("subtitle")) $("subtitle").textContent = `Filtro: ${localText} • ${quadroText} • ${dispositivoText}`;
 }
@@ -954,30 +825,22 @@ async function carregarPainelCompleto() {
   setStatusText("Carregando...", "warn");
   setButtonLoading($("btnAplicar"), true);
   setButtonLoading($("btnRefresh"), true);
-
   try {
     const localId  = $("local")?.value  || "";
     const quadroId = $("quadro")?.value || "";
-
     await Promise.all([carregarConsumo(), carregarAlertasAPI()]);
     medicoesCache = [];
-
     carregarKPIsETabela();
     carregarAlertasUI();
     carregarEventos();
-
     if (consumoCache.length) await carregarGraficoPrincipal();
     else destruirGrafico();
-
-    // Se a página de potência estiver ativa, atualiza também
     if (document.getElementById("page-potencia")?.classList.contains("active")) {
       await carregarPaginaPotencia();
     }
-
     if (!localId && !quadroId)     showFeedback("Exibindo visão geral de todos os locais.", "info");
     else if (localId && !quadroId) showFeedback("Exibindo consumo por quadro do local selecionado.", "info");
     else                           showFeedback("Exibindo visão geral do quadro.", "info");
-
     setStatusText("Atualizado agora", "ok");
   } catch (error) {
     console.error(error);
@@ -1000,7 +863,6 @@ function configurarExportacoes() {
     agrupado.forEach(i => rows.push([nome, formatDateBR(i.data), Number(i.kwh||0).toFixed(2)]));
     exportCsv("dispositivo_consumo.csv", rows);
   });
-
   $("btnExportEvents")?.addEventListener("click", () => {
     const rows = [["DataHora","Tipo","Severidade","Dispositivo","Descricao","Status"]];
     eventosCache.forEach(e => rows.push([
@@ -1021,44 +883,34 @@ function configurarEventosUI() {
     if ($("dispositivo")) { $("dispositivo").innerHTML = `<option value="">Todos os dispositivos</option>`; $("dispositivo").value = ""; }
     await carregarPainelCompleto();
   });
-
   $("quadro")?.addEventListener("change", async e => {
     await carregarDispositivos(e.target.value || "");
     if ($("dispositivo")) $("dispositivo").value = "";
     await carregarPainelCompleto();
   });
-
   $("dispositivo")?.addEventListener("change", async () => {
     carregarKPIsETabela();
     carregarEventos();
     atualizarSubtitulo();
     await carregarGraficoPrincipal();
-    // Atualiza potência se a página estiver ativa
     if (document.getElementById("page-potencia")?.classList.contains("active")) {
       await carregarPaginaPotencia();
     }
   });
-
   $("eventFilter")?.addEventListener("change", () => carregarEventos());
-
   $("intervalo")?.addEventListener("change", async () => {
     await carregarConsumo();
     await carregarGraficoPrincipal();
     carregarKPIsETabela();
   });
-
   $("chartMode")?.addEventListener("change", async () => await carregarGraficoPrincipal());
-
   $("chartModeMedicoes")?.addEventListener("change", e => renderGraficoMedicoes(e.target.value));
-
-  // Selector do gráfico temporal de potência
   $("chartModePotencia")?.addEventListener("change", async () => {
     const fases = await carregarDadosPotencia();
     renderGraficoTemporalPotencia(fases);
   });
-
-  $("btnAplicar")?.addEventListener("click",  async () => await carregarPainelCompleto());
-  $("btnRefresh")?.addEventListener("click",  async () => await carregarPainelCompleto());
+  $("btnAplicar")?.addEventListener("click", async () => await carregarPainelCompleto());
+  $("btnRefresh")?.addEventListener("click", async () => await carregarPainelCompleto());
   $("btnRefreshPotencia")?.addEventListener("click", async () => await carregarPaginaPotencia());
 }
 
@@ -1076,22 +928,18 @@ function fecharSidebar() { $("sidenav")?.classList.remove("open"); $("navOverlay
 function navegarPara(pageId) {
   document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
   document.querySelectorAll(".nav-item").forEach(b => b.classList.remove("active"));
-
   const page = document.getElementById("page-" + pageId);
   if (page) page.classList.add("active");
-
   const btn = document.querySelector(`.nav-item[data-page="${pageId}"]`);
   if (btn) btn.classList.add("active");
-
   if ($("pageTitle")) $("pageTitle").textContent = pageTitles[pageId] || pageId;
 
-  // Esconde KPIs globais na página Potência (ela tem seus próprios cards de potência)
+  // Esconde KPIs globais na página Potência
   const kpisBar = $("kpisBar");
   if (kpisBar) kpisBar.style.display = pageId === "potencia" ? "none" : "";
 
   fecharSidebar();
 
-  // Carrega dados ao entrar em cada página
   if (pageId === "medicoes") {
     const modo = $("chartModeMedicoes")?.value || "tensao";
     if (!medicoesCache.length) {
@@ -1100,7 +948,6 @@ function navegarPara(pageId) {
       renderGraficoMedicoes(modo);
     }
   }
-
   if (pageId === "potencia") {
     carregarPaginaPotencia().catch(console.error);
   }
