@@ -373,20 +373,32 @@ async function carregarMedicoesPorFase(dispositivoId, fase) {
 }
 
 /**
- * Carrega as 3 fases (A, B, C) do dispositivo selecionado no filtro.
- * Se nenhum dispositivo selecionado, usa o primeiro da lista (dispositivo_id=1).
- * Cada fase é buscada em: GET /medicoes/?dispositivo_id=X&fase=A|B|C
+ * Carrega fases do dispositivo selecionado no filtro dedicado da página de Potência.
+ * Prioridade: selDispositivoPotencia → filtro global → primeiro da lista → id=1.
+ * Se uma fase específica for selecionada em selFasePotencia, busca só ela.
+ * GET /medicoes/?dispositivo_id=X&fase=A|B|C&limit=20
  */
 async function carregarDadosPotencia() {
-  // Dispositivo selecionado no filtro, ou o primeiro disponível (id=1)
-  const dispositivoFiltro = $("dispositivo")?.value || "";
-  const dispositivoId = dispositivoFiltro
-    ? Number(dispositivoFiltro)
-    : (todosDispositivosCache[0]?.id ?? 1);
+  const selDisp = $("selDispositivoPotencia");
+  const selFase = $("selFasePotencia");
 
-  // Busca as 3 fases em paralelo para o dispositivo selecionado
+  const dispositivoId = Number(
+    selDisp?.value || $("dispositivo")?.value || todosDispositivosCache[0]?.id || 1
+  );
+
+  const faseSelecionada = selFase?.value || "";
+  const fasesBuscar = faseSelecionada ? [faseSelecionada] : FASES;
+
+  // Atualiza label do dispositivo no subtítulo da página de potência
+  const nomeDisp = todosDispositivosCache.find(d => d.id === dispositivoId)?.nome
+    || selDisp?.selectedOptions?.[0]?.textContent
+    || `Dispositivo ${dispositivoId}`;
+  const labelFase = faseSelecionada ? `Fase ${faseSelecionada}` : "Todas as fases";
+  const subtitulo = $("potenciaSubtitulo");
+  if (subtitulo) subtitulo.textContent = `${nomeDisp} · ${labelFase}`;
+
   const fases = await Promise.all(
-    FASES.map(async fase => {
+    fasesBuscar.map(async fase => {
       try {
         const medicoes = await carregarMedicoesPorFase(dispositivoId, fase);
         return { dispositivo_id: dispositivoId, fase, label: `Fase ${fase}`, medicoes };
@@ -397,6 +409,29 @@ async function carregarDadosPotencia() {
   );
 
   return fases;
+}
+
+/**
+ * Preenche o select de dispositivos dedicado à página de Potência.
+ * Chamado após carregarTodosDispositivos().
+ */
+function preencherSelDispositivoPotencia() {
+  const sel = $("selDispositivoPotencia"); if (!sel) return;
+  const valorAtual = sel.value;
+  sel.innerHTML = `<option value="">Selecione o dispositivo</option>`;
+  todosDispositivosCache.forEach(d => {
+    const o = document.createElement("option");
+    o.value = d.id;
+    o.textContent = d.nome + (d.ativo ? "" : " (inativo)");
+    sel.appendChild(o);
+  });
+  // Restaura seleção anterior se ainda válida
+  if (valorAtual) sel.value = valorAtual;
+  // Se nenhum selecionado, pré-seleciona o primeiro ativo
+  if (!sel.value && todosDispositivosCache.length) {
+    const primeiroAtivo = todosDispositivosCache.find(d => d.ativo) || todosDispositivosCache[0];
+    if (primeiroAtivo) sel.value = primeiroAtivo.id;
+  }
 }
 
 /* ══════════════════════════════════════
@@ -909,6 +944,13 @@ function configurarEventosUI() {
     const fases = await carregarDadosPotencia();
     renderGraficoTemporalPotencia(fases);
   });
+  // Filtros dedicados da página de Potência
+  $("selDispositivoPotencia")?.addEventListener("change", async () => {
+    await carregarPaginaPotencia();
+  });
+  $("selFasePotencia")?.addEventListener("change", async () => {
+    await carregarPaginaPotencia();
+  });
   $("btnAplicar")?.addEventListener("click", async () => await carregarPainelCompleto());
   $("btnRefresh")?.addEventListener("click", async () => await carregarPainelCompleto());
   $("btnRefreshPotencia")?.addEventListener("click", async () => await carregarPaginaPotencia());
@@ -972,6 +1014,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     configurarExportacoes();
     await carregarLocais();
     await carregarTodosDispositivos();
+    preencherSelDispositivoPotencia(); // popula o filtro dedicado da página de Potência
     await carregarPainelCompleto();
   } catch (error) {
     console.error(error);
