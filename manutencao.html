@@ -215,6 +215,23 @@
       <!-- Tabela por fase -->
       <div class="card">
         <div class="card-head">
+          <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end;">
+            <label class="chip">
+              Dispositivo
+              <select id="selDispositivoPotencia">
+                <option value="">Carregando...</option>
+              </select>
+            </label>
+            <label class="chip">
+              Fase
+              <select id="selFasePotencia">
+                <option value="">Todas as fases</option>
+                <option value="A">Fase A</option>
+                <option value="B">Fase B</option>
+                <option value="C">Fase C</option>
+              </select>
+            </label>
+          </div>
           <button class="btn-action primary" id="btnRefreshPotencia" style="width:auto;padding:8px 16px;border-radius:10px;font-size:12px;">↺ Atualizar</button>
         </div>
         <div class="table-wrap">
