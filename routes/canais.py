@@ -26,7 +26,7 @@ def listar_canais(
         ).subquery()
         query = query.filter(models.CanalMedicao.dispositivo_id.in_(dispositivos))
 
-    return query.order_by(models.CanalMedicao.nome).all()
+    return query.order_by(models.CanalMedicao.fase).all()
 
 
 @router.get("/{canal_id}", response_model=schemas.CanalMedicaoOut)
