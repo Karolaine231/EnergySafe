@@ -650,16 +650,22 @@ html, body {
   .topbar-left h1 { font-size: 18px; }
 }
 
-.table-wrap {
-  max-height: 420px;
+#page-potencia .table-wrap {
+  max-height: 360px;
   overflow-y: auto;
   overflow-x: auto;
+  display: block;
 }
 
-.table thead th {
+#page-potencia #tableFases {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+#page-potencia #tableFases thead th {
   position: sticky;
   top: 0;
-  z-index: 2;
-  background: #1d2a3a;
+  z-index: 5;
+  background: #1b2a3a;
 }
 
