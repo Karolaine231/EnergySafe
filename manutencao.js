@@ -20,6 +20,17 @@ const COR_ATIVA    = { bg: "rgba(56,189,248,0.75)",  border: "rgba(56,189,248,1)
 const COR_APARENTE = { bg: "rgba(139,92,246,0.75)",  border: "rgba(139,92,246,1)"  };
 const COR_REATIVA  = { bg: "rgba(34,197,94,0.75)",   border: "rgba(34,197,94,1)"   };
 
+// Nomes amigáveis para exibição — chave = nome técnico da API, valor = nome do cliente
+const NOMES_DISPOSITIVOS = {
+  "ESP32_ADM0_A307": "Quadro Salas de Aula",
+  "ESP32_ADM1_A301": "Quadro Administração",
+  "ESP32_ADM2_A302": "Quadro Reitoria"
+};
+
+function nomeAmigavel(nomeOriginal) {
+  return NOMES_DISPOSITIVOS[nomeOriginal] || nomeOriginal;
+}
+
 /* ══════════════════════════════════════
    HELPERS GERAIS
 ══════════════════════════════════════ */
@@ -172,7 +183,7 @@ function adaptQuadro(item) {
 function adaptDispositivo(item) {
   return {
     id: pick(item,"id","dispositivo_id"),
-    nome: pick(item,"nome","name","descricao") || `Dispositivo ${pick(item,"id","dispositivo_id")}`,
+    nome: nomeAmigavel(pick(item,"nome","name","descricao") || `Dispositivo ${pick(item,"id","dispositivo_id")}`),  // ← aqui
     quadro_id: pick(item,"quadro_id","quadroId"),
     ativo: Boolean(pick(item,"ativo","active","is_active"))
   };
