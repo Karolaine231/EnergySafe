@@ -584,24 +584,28 @@ function carregarKPIsETabela() {
   // Se nenhum quadro selecionado, usa todos os dispositivos do sistema
   const fonte = dispositivosCache.length ? dispositivosCache : todosDispositivosCache;
 
-lista.forEach(d => {
-  // Filtra consumoCache só dos canais desse dispositivo
-  const consumoDisp = consumoCache.filter(c => 
-    String(c.canal_id) === String(d.id) ||
-    dispositivosCache.find(x => x.id === d.id) // fallback
-  );
-  
-  const agrupadoDisp = new Map();
-  consumoDisp.forEach(item => {
-    agrupadoDisp.set(item.data, (agrupadoDisp.get(item.data) || 0) + Number(item.kwh || 0));
+  if (!fonte.length) {
+    tbody.innerHTML = `<tr><td colspan="4">Nenhum dispositivo encontrado.</td></tr>`;
+    return;
+  }
+
+  // Filtra por dispositivo se selecionado, senão mostra todos
+  let lista = [...fonte];
+  if (dispositivoId) lista = lista.filter(d => String(d.id) === String(dispositivoId));
+
+  const totalPeriodo = agrupado.reduce((s,i) => s + i.kwh, 0);
+
+  lista.forEach(d => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${d.nome}</td>
+      <td><span class="tag ${d.ativo ? "" : "danger"}">${d.ativo ? "Ativo" : "Inativo"}</span></td>
+      <td>${ultimo ? formatDateBR(ultimo.data) : "-"}</td>
+      <td>${totalPeriodo.toFixed(2)} kWh</td>
+    `;
+    tbody.appendChild(tr);
   });
-  
-  const totalDisp = [...agrupadoDisp.values()].reduce((s, v) => s + v, 0);
-  
-  tr.innerHTML = `...
-    <td>${totalDisp.toFixed(2)} kWh</td>
-  `;
-});
+}
 
 /* ══════════════════════════════════════
    ALERTAS
