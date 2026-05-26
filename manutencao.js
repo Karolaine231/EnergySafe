@@ -246,7 +246,8 @@ function adaptMedicao(item) {
    HELPERS DE PERÍODO E AGRUPAMENTO
 ══════════════════════════════════════ */
 function filtrarConsumoPorPeriodo() {
-  const dias = Number($("intervalo")?.value || 30);
+  const periodo = $("intervalo")?.value || "7";
+  const dias = periodo === "24h" ? 1 : Number(periodo || 7);
   const ordenados = [...consumoCache].filter(i => i.data).sort((a,b) => a.data.localeCompare(b.data));
   if (!ordenados.length) return [];
   const ultima = ordenados[ordenados.length - 1].data;
@@ -265,7 +266,8 @@ function getConsumoAgrupadoPorData() {
 }
 
 function agruparSeriePorCampo(medicoes, campo) {
-  const dias = Number($("intervalo")?.value || 30);
+  const periodo = $("intervalo")?.value || "7";
+  const dias = periodo === "24h" ? 1 : Number(periodo || 7);
   const lista = medicoes
     .map(i => ({ data: normalizeTimestamp(i.timestamp)?.slice(0,10), valor: Number(i[campo] || 0) }))
     .filter(i => i.data)
