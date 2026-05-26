@@ -13,7 +13,6 @@ const TIPO_LABEL = {
   sobrecorrente: "Sobrecorrente"
 };
 
-
 const NIVEL_LABEL = { critico: "Crítico", aviso: "Aviso", info: "Informativo" };
 const NIVEL_CLASS = { critico: "danger", aviso: "warn", info: "" };
 
@@ -137,7 +136,6 @@ function formatTipo(tipo) {
 function formatNivel(nivel) {
   return NIVEL_LABEL[nivel] || nivel || "-";
 }
-
 
 /* ══════════════════════════════════════
    ESTADO GLOBAL
