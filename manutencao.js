@@ -3,7 +3,6 @@
 ══════════════════════════════════════ */
 const API_BASE = "https://backendsafe.onrender.com";
 
-// Fases por dispositivo — dispositivo_id 1, 2 e 3
 const FASES = ["A", "B", "C"];
 const DISPOSITIVOS_IDS = [1, 2, 3];
 
@@ -145,14 +144,18 @@ let chartMedicoes    = null;
 let chartPotencia    = null;
 let chartPotTemporal = null;
 
-let locaisCache           = [];
-let quadrosCache          = [];
-let dispositivosCache     = [];
+let locaisCache            = [];
+let quadrosCache           = [];
+let dispositivosCache      = [];
 let todosDispositivosCache = [];
-let consumoCache          = [];
-let alertasCache          = [];
-let eventosCache          = [];
-let medicoesCache         = [];
+let consumoCache           = [];
+let alertasCache           = [];
+let eventosCache           = [];
+let medicoesCache          = [];
+
+// Mapa: dispositivo_id → { canais: [], consumo: [] }
+// Preenchido por carregarConsumoTodosDispositivos()
+let consumoPorDispositivoCache = new Map();
 
 /* ══════════════════════════════════════
    ADAPTADORES
@@ -208,10 +211,8 @@ function adaptMedicao(item) {
   const potencia_reativa = pick(item,"potencia_reativa");
   let fator_potencia    = pick(item,"fator_potencia");
 
-  // Fallback: potencia_ativa ← potencia (legado)
   if (potencia_ativa === null && potencia > 0) potencia_ativa = potencia;
 
-  // Fallback: fator_potencia calculado P/S
   if (fator_potencia === null && potencia_ativa && potencia_aparente && potencia_aparente > 0) {
     fator_potencia = Math.min(potencia_ativa / potencia_aparente, 1.0);
   }
@@ -234,15 +235,15 @@ function adaptMedicao(item) {
 /* ══════════════════════════════════════
    HELPERS DE PERÍODO E AGRUPAMENTO
 ══════════════════════════════════════ */
-function filtrarConsumoPorPeriodo() {
+function filtrarConsumoPorPeriodo(lista) {
   const periodo = $("intervalo")?.value || "7";
-  const ordenados = [...consumoCache]
+  const fonte = lista ?? consumoCache;
+  const ordenados = [...fonte]
     .filter(i => i.data && /^\d{4}-\d{2}-\d{2}$/.test(String(i.data)))
     .sort((a,b) => String(a.data).localeCompare(String(b.data)));
   if (!ordenados.length) return [];
   const ultima = ordenados[ordenados.length - 1].data;
 
-  // "24h" = só o último dia disponível
   if (periodo === "24h") {
     return ordenados.filter(i => i.data === ultima);
   }
@@ -257,9 +258,9 @@ function filtrarConsumoPorPeriodo() {
   return ordenados.filter(i => i.data >= iniStr && i.data <= ultima);
 }
 
-function getConsumoAgrupadoPorData() {
+function getConsumoAgrupadoPorData(lista) {
   const bucket = new Map();
-  filtrarConsumoPorPeriodo().forEach(item => {
+  filtrarConsumoPorPeriodo(lista).forEach(item => {
     bucket.set(item.data, (bucket.get(item.data) || 0) + Number(item.kwh || 0));
   });
   return Array.from(bucket.entries()).map(([data,kwh]) => ({ data, kwh })).sort((a,b) => a.data.localeCompare(b.data));
@@ -358,44 +359,29 @@ async function carregarDispositivos(quadroId = "") {
   });
 }
 
-async function carregarConsumo() {
-  const dispositivoId = $("selDispositivoConsumo")?.value || "";
+/* ══════════════════════════════════════
+   CONSUMO — busca geral e por dispositivo
+══════════════════════════════════════ */
 
-  // Descobre quais sensor_ids (canal_ids) buscar
-  let sensorIds = [];
-
-  if (dispositivoId) {
-    // Dispositivo específico → busca seus canais
-    try {
-      const canais = asArray(await getJSON("/canais/", { dispositivo_id: dispositivoId }));
-      sensorIds = canais.map(c => c.id ?? c.canal_id).filter(Boolean);
-    } catch(e) {
-      console.warn("Canais do dispositivo:", e);
-    }
-    // Fallback: usa o próprio dispositivo_id como sensor_id
-    if (!sensorIds.length) sensorIds = [Number(dispositivoId)];
-  } else {
-    // Todos os dispositivos → usa todos os canais conhecidos
-    try {
-      const todos = todosDispositivosCache.length
-        ? todosDispositivosCache
-        : asArray(await getJSON("/dispositivos/", { limit: 500 })).map(adaptDispositivo);
-
-      const canaisPorDisp = await Promise.all(
-        todos.map(d => getJSON("/canais/", { dispositivo_id: d.id }).then(asArray).catch(() => []))
-      );
-      sensorIds = canaisPorDisp.flat().map(c => c.id ?? c.canal_id).filter(Boolean);
-    } catch(e) {
-      console.warn("Canais gerais:", e);
-    }
+/**
+ * Retorna os canal_ids de um dispositivo, com fallback para o próprio id.
+ */
+async function getCanaisDeDispositivo(dispositivoId) {
+  try {
+    const canais = asArray(await getJSON("/canais/", { dispositivo_id: dispositivoId }));
+    const ids = canais.map(c => c.id ?? c.canal_id).filter(Boolean);
+    if (ids.length) return ids;
+  } catch(e) {
+    console.warn(`Canais do dispositivo ${dispositivoId}:`, e);
   }
+  return [Number(dispositivoId)];
+}
 
-  if (!sensorIds.length) {
-    consumoCache = [];
-    return consumoCache;
-  }
-
-  // Busca consumo de cada sensor em paralelo
+/**
+ * Busca consumo de uma lista de sensor_ids e retorna array de adaptConsumo.
+ */
+async function fetchConsumoPorSensors(sensorIds) {
+  if (!sensorIds.length) return [];
   const resultados = await Promise.all(
     sensorIds.map(sid =>
       getJSON("/consumo/", { sensor_id: sid, limit: 500 })
@@ -406,9 +392,52 @@ async function carregarConsumo() {
         .catch(() => [])
     )
   );
+  return resultados.flat();
+}
 
-  consumoCache = resultados.flat();
+/**
+ * Carrega consumo global (usado pelo gráfico principal e KPIs gerais).
+ * Preenche consumoCache.
+ */
+async function carregarConsumo() {
+  const dispositivoId = $("selDispositivoConsumo")?.value || "";
+
+  let sensorIds = [];
+
+  if (dispositivoId) {
+    sensorIds = await getCanaisDeDispositivo(Number(dispositivoId));
+  } else {
+    const todos = todosDispositivosCache.length
+      ? todosDispositivosCache
+      : asArray(await getJSON("/dispositivos/", { limit: 500 })).map(adaptDispositivo);
+
+    const canaisPorDisp = await Promise.all(
+      todos.map(d => getJSON("/canais/", { dispositivo_id: d.id }).then(asArray).catch(() => []))
+    );
+    sensorIds = canaisPorDisp.flat().map(c => c.id ?? c.canal_id).filter(Boolean);
+  }
+
+  consumoCache = await fetchConsumoPorSensors(sensorIds);
   return consumoCache;
+}
+
+/**
+ * Carrega consumo individual por dispositivo e preenche consumoPorDispositivoCache.
+ * Chamado uma vez na inicialização e no refresh geral.
+ */
+async function carregarConsumoPorTodosDispositivos() {
+  consumoPorDispositivoCache.clear();
+  const todos = todosDispositivosCache.length
+    ? todosDispositivosCache
+    : asArray(await getJSON("/dispositivos/", { limit: 500 })).map(adaptDispositivo);
+
+  await Promise.all(
+    todos.map(async d => {
+      const sensorIds = await getCanaisDeDispositivo(d.id);
+      const consumo   = await fetchConsumoPorSensors(sensorIds);
+      consumoPorDispositivoCache.set(d.id, consumo);
+    })
+  );
 }
 
 async function carregarAlertasAPI() {
@@ -426,10 +455,6 @@ async function carregarMedicoesGerais() {
   return medicoesCache;
 }
 
-/**
- * Busca medições de um canal específico.
- * GET /medicoes/?canal_id=X&limit=20
- */
 async function carregarMedicoesPorCanal(canalId) {
   const raw = await getJSON("/medicoes/", { canal_id: canalId, limit: 20 });
   return asArray(raw).map(adaptMedicao).filter(m =>
@@ -437,9 +462,6 @@ async function carregarMedicoesPorCanal(canalId) {
   );
 }
 
-/**
- * Preenche o select de dispositivos da página de Potência e da página de Consumo.
- */
 function preencherSelDispositivos() {
   ["selDispositivoPotencia", "selDispositivoConsumo"].forEach(selId => {
     const sel = $(selId); if (!sel) return;
@@ -455,10 +477,6 @@ function preencherSelDispositivos() {
   });
 }
 
-/**
- * Busca os canais de um dispositivo e retorna as fases com medições.
- * GET /canais/?dispositivo_id=X  → para cada canal: GET /medicoes/?canal_id=Y
- */
 async function carregarFasesDeDispositivo(dispositivoId, faseSelecionada) {
   const LETRAS = ["A", "B", "C"];
   const FASE_INDEX = { A: 0, B: 1, C: 2 };
@@ -501,11 +519,6 @@ async function carregarFasesDeDispositivo(dispositivoId, faseSelecionada) {
   );
 }
 
-/**
- * Carrega dados de potência respeitando filtros de dispositivo e fase.
- * - Sem dispositivo → busca todos e soma
- * - Com dispositivo → só aquele
- */
 async function carregarDadosPotencia() {
   const selDisp = $("selDispositivoPotencia");
   const selFase = $("selFasePotencia");
@@ -526,7 +539,6 @@ async function carregarDadosPotencia() {
     return carregarFasesDeDispositivo(dispositivoIdSel, faseSelecionada);
   }
 
-  // Todos os dispositivos
   const dispositivos = todosDispositivosCache.length
     ? todosDispositivosCache
     : asArray(await getJSON("/dispositivos/", { limit: 500 })).map(adaptDispositivo);
@@ -560,14 +572,12 @@ async function resolverAlerta(alertaId, botao = null) {
 
 /* ══════════════════════════════════════
    KPIs E TABELA DE DISPOSITIVOS
+   ← CORRIGIDO: consumo individual por dispositivo
 ══════════════════════════════════════ */
 function carregarKPIsETabela() {
-  const dispositivoId = $("dispositivo")?.value || "";
-  const agrupado = getConsumoAgrupadoPorData();
-  const ultimo = agrupado[agrupado.length - 1] || null;
+  const dispositivoIdFiltro = $("dispositivo")?.value || "";
   const alertasAtivos = alertasCache.filter(a => !a.resolvido).length;
 
-  // KPIs sempre usam TODOS os dispositivos do sistema
   const fonteKpi = todosDispositivosCache.length ? todosDispositivosCache : dispositivosCache;
   const ativos   = fonteKpi.filter(d => d.ativo).length;
   const inativos = fonteKpi.filter(d => !d.ativo).length;
@@ -581,7 +591,7 @@ function carregarKPIsETabela() {
   if (!tbody) return;
   tbody.innerHTML = "";
 
-  // Se nenhum quadro selecionado, usa todos os dispositivos do sistema
+  // Fonte de dispositivos a exibir
   const fonte = dispositivosCache.length ? dispositivosCache : todosDispositivosCache;
 
   if (!fonte.length) {
@@ -589,19 +599,25 @@ function carregarKPIsETabela() {
     return;
   }
 
-  // Filtra por dispositivo se selecionado, senão mostra todos
   let lista = [...fonte];
-  if (dispositivoId) lista = lista.filter(d => String(d.id) === String(dispositivoId));
-
-  const totalPeriodo = agrupado.reduce((s,i) => s + i.kwh, 0);
+  if (dispositivoIdFiltro) lista = lista.filter(d => String(d.id) === String(dispositivoIdFiltro));
 
   lista.forEach(d => {
+    // Pega o consumo específico desse dispositivo no cache individual
+    const consumoDisp = consumoPorDispositivoCache.get(d.id) ?? [];
+
+    // Aplica o mesmo filtro de período que o restante do painel
+    const agrupadoDisp = getConsumoAgrupadoPorData(consumoDisp);
+
+    const totalDisp = agrupadoDisp.reduce((s, i) => s + i.kwh, 0);
+    const ultimaData = agrupadoDisp.length ? agrupadoDisp[agrupadoDisp.length - 1].data : null;
+
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${d.nome}</td>
       <td><span class="tag ${d.ativo ? "" : "danger"}">${d.ativo ? "Ativo" : "Inativo"}</span></td>
-      <td>${ultimo ? formatDateBR(ultimo.data) : "-"}</td>
-      <td>${totalPeriodo.toFixed(2)} kWh</td>
+      <td>${ultimaData ? formatDateBR(ultimaData) : "-"}</td>
+      <td>${totalDisp.toFixed(2)} kWh</td>
     `;
     tbody.appendChild(tr);
   });
@@ -820,10 +836,10 @@ function preencherCardsPotencia(fases) {
     if (m.fator_potencia !== null) { someFP += m.fator_potencia; countFP++; }
   });
   const fpMedio = countFP > 0 ? (someFP / countFP).toFixed(3) : "—";
-  if ($("potAtivaTot"))   $("potAtivaTot").innerHTML   = `${totalAtiva.toFixed(0)} <span>W</span>`;
+  if ($("potAtivaTot"))    $("potAtivaTot").innerHTML    = `${totalAtiva.toFixed(0)} <span>W</span>`;
   if ($("potAparenteTot")) $("potAparenteTot").innerHTML = `${totalAparente.toFixed(0)} <span>VA</span>`;
-  if ($("potReativaTot")) $("potReativaTot").innerHTML  = `${totalReativa.toFixed(0)} <span>VAr</span>`;
-  if ($("fatPotMedio"))   $("fatPotMedio").innerHTML   = `${fpMedio} <span>cos(ϕ)</span>`;
+  if ($("potReativaTot"))  $("potReativaTot").innerHTML  = `${totalReativa.toFixed(0)} <span>VAr</span>`;
+  if ($("fatPotMedio"))    $("fatPotMedio").innerHTML    = `${fpMedio} <span>cos(ϕ)</span>`;
 }
 
 function preencherTabelaFases(fases) {
@@ -910,8 +926,8 @@ function renderGraficoTemporalPotencia(fases) {
     });
     return {
       label: f.label, data: dados,
-      borderColor: cores[i].border,
-      backgroundColor: cores[i].bg.replace("0.75","0.15"),
+      borderColor: cores[i % cores.length].border,
+      backgroundColor: cores[i % cores.length].bg.replace("0.75","0.15"),
       borderWidth:2, pointRadius:3, pointHoverRadius:5, tension:0.3, fill:false, spanGaps:true
     };
   });
@@ -965,9 +981,11 @@ async function carregarPainelCompleto() {
   setButtonLoading($("btnAplicar"), true);
   setButtonLoading($("btnRefresh"), true);
   try {
-    const localId  = $("local")?.value  || "";
-    const quadroId = $("quadro")?.value || "";
-    await Promise.all([carregarConsumo(), carregarAlertasAPI()]);
+    await Promise.all([
+      carregarConsumo(),
+      carregarAlertasAPI(),
+      carregarConsumoPorTodosDispositivos()   // ← garante cache individual atualizado
+    ]);
     medicoesCache = [];
     carregarKPIsETabela();
     carregarAlertasUI();
@@ -977,6 +995,8 @@ async function carregarPainelCompleto() {
     if (document.getElementById("page-potencia")?.classList.contains("active")) {
       await carregarPaginaPotencia();
     }
+    const localId  = $("local")?.value  || "";
+    const quadroId = $("quadro")?.value || "";
     if (!localId && !quadroId)     showFeedback("Exibindo visão geral de todos os locais.", "info");
     else if (localId && !quadroId) showFeedback("Exibindo consumo por quadro do local selecionado.", "info");
     else                           showFeedback("Exibindo visão geral do quadro.", "info");
@@ -996,10 +1016,13 @@ async function carregarPainelCompleto() {
 ══════════════════════════════════════ */
 function configurarExportacoes() {
   $("btnExportSensors")?.addEventListener("click", () => {
-    const agrupado = getConsumoAgrupadoPorData();
     const rows = [["Dispositivo","Data","Consumo (kWh)"]];
-    const nome = $("dispositivo")?.selectedOptions?.[0]?.textContent || "Todos";
-    agrupado.forEach(i => rows.push([nome, formatDateBR(i.data), Number(i.kwh||0).toFixed(2)]));
+    const fonte = dispositivosCache.length ? dispositivosCache : todosDispositivosCache;
+    fonte.forEach(d => {
+      const consumoDisp = consumoPorDispositivoCache.get(d.id) ?? [];
+      const agrupado = getConsumoAgrupadoPorData(consumoDisp);
+      agrupado.forEach(i => rows.push([d.nome, formatDateBR(i.data), Number(i.kwh||0).toFixed(2)]));
+    });
     exportCsv("dispositivo_consumo.csv", rows);
   });
   $("btnExportEvents")?.addEventListener("click", () => {
@@ -1079,7 +1102,6 @@ function navegarPara(pageId) {
   if (btn) btn.classList.add("active");
   if ($("pageTitle")) $("pageTitle").textContent = pageTitles[pageId] || pageId;
 
-  // Esconde KPIs globais na página Potência
   const kpisBar = $("kpisBar");
   if (kpisBar) kpisBar.style.display = pageId === "potencia" ? "none" : "";
 
