@@ -20,17 +20,6 @@ const COR_ATIVA    = { bg: "rgba(56,189,248,0.75)",  border: "rgba(56,189,248,1)
 const COR_APARENTE = { bg: "rgba(139,92,246,0.75)",  border: "rgba(139,92,246,1)"  };
 const COR_REATIVA  = { bg: "rgba(34,197,94,0.75)",   border: "rgba(34,197,94,1)"   };
 
-// Nomes amigáveis para exibição — chave = nome técnico da API, valor = nome do cliente
-const NOMES_DISPOSITIVOS = {
-  "ESP32_ADM0_A307": "Quadro Salas de Aula",
-  "ESP32_ADM1_A301": "Quadro Administração",
-  "ESP32_ADM2_A302": "Quadro Reitoria"
-};
-
-function nomeAmigavel(nomeOriginal) {
-  return NOMES_DISPOSITIVOS[nomeOriginal] || nomeOriginal;
-}
-
 /* ══════════════════════════════════════
    HELPERS GERAIS
 ══════════════════════════════════════ */
@@ -183,7 +172,7 @@ function adaptQuadro(item) {
 function adaptDispositivo(item) {
   return {
     id: pick(item,"id","dispositivo_id"),
-    nome: nomeAmigavel(pick(item,"nome","name","descricao") || `Dispositivo ${pick(item,"id","dispositivo_id")}`),  // ← aqui
+    nome: pick(item,"nome","name","descricao") || `Dispositivo ${pick(item,"id","dispositivo_id")}`,
     quadro_id: pick(item,"quadro_id","quadroId"),
     ativo: Boolean(pick(item,"ativo","active","is_active"))
   };
@@ -246,8 +235,7 @@ function adaptMedicao(item) {
    HELPERS DE PERÍODO E AGRUPAMENTO
 ══════════════════════════════════════ */
 function filtrarConsumoPorPeriodo() {
-  const periodo = $("intervalo")?.value || "7";
-  const dias = periodo === "24h" ? 1 : Number(periodo || 7);
+  const dias = Number($("intervalo")?.value || 30);
   const ordenados = [...consumoCache].filter(i => i.data).sort((a,b) => a.data.localeCompare(b.data));
   if (!ordenados.length) return [];
   const ultima = ordenados[ordenados.length - 1].data;
@@ -266,8 +254,7 @@ function getConsumoAgrupadoPorData() {
 }
 
 function agruparSeriePorCampo(medicoes, campo) {
-  const periodo = $("intervalo")?.value || "7";
-  const dias = periodo === "24h" ? 1 : Number(periodo || 7);
+  const dias = Number($("intervalo")?.value || 30);
   const lista = medicoes
     .map(i => ({ data: normalizeTimestamp(i.timestamp)?.slice(0,10), valor: Number(i[campo] || 0) }))
     .filter(i => i.data)
@@ -348,11 +335,54 @@ async function carregarDispositivos(quadroId = "") {
 
 async function carregarConsumo() {
   const dispositivoId = $("selDispositivoConsumo")?.value || "";
-  const params = { limit: 500 };
-  if (dispositivoId) params.dispositivo_id = dispositivoId;
-  const raw = await getJSON("/consumo/", params);
-  const dados = Array.isArray(raw) ? raw : (raw?.dados ?? []);
-  consumoCache = dados.map(adaptConsumo);
+
+  // Descobre quais sensor_ids (canal_ids) buscar
+  let sensorIds = [];
+
+  if (dispositivoId) {
+    // Dispositivo específico → busca seus canais
+    try {
+      const canais = asArray(await getJSON("/canais/", { dispositivo_id: dispositivoId }));
+      sensorIds = canais.map(c => c.id ?? c.canal_id).filter(Boolean);
+    } catch(e) {
+      console.warn("Canais do dispositivo:", e);
+    }
+    // Fallback: usa o próprio dispositivo_id como sensor_id
+    if (!sensorIds.length) sensorIds = [Number(dispositivoId)];
+  } else {
+    // Todos os dispositivos → usa todos os canais conhecidos
+    try {
+      const todos = todosDispositivosCache.length
+        ? todosDispositivosCache
+        : asArray(await getJSON("/dispositivos/", { limit: 500 })).map(adaptDispositivo);
+
+      const canaisPorDisp = await Promise.all(
+        todos.map(d => getJSON("/canais/", { dispositivo_id: d.id }).then(asArray).catch(() => []))
+      );
+      sensorIds = canaisPorDisp.flat().map(c => c.id ?? c.canal_id).filter(Boolean);
+    } catch(e) {
+      console.warn("Canais gerais:", e);
+    }
+  }
+
+  if (!sensorIds.length) {
+    consumoCache = [];
+    return consumoCache;
+  }
+
+  // Busca consumo de cada sensor em paralelo
+  const resultados = await Promise.all(
+    sensorIds.map(sid =>
+      getJSON("/consumo/", { sensor_id: sid, limit: 500 })
+        .then(raw => {
+          const dados = Array.isArray(raw) ? raw : (raw?.dados ?? []);
+          return dados.map(adaptConsumo);
+        })
+        .catch(() => [])
+    )
+  );
+
+  consumoCache = resultados.flat();
   return consumoCache;
 }
 
