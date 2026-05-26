@@ -15,9 +15,9 @@ const TIPO_LABEL = {
 const NIVEL_LABEL = { critico: "Crítico", aviso: "Aviso", info: "Informativo" };
 const NIVEL_CLASS = { critico: "danger", aviso: "warn", info: "" };
 
-const COR_ATIVA    = { bg: "rgba(56,189,248,0.75)",  border: "rgba(56,189,248,1)"  };
-const COR_APARENTE = { bg: "rgba(139,92,246,0.75)",  border: "rgba(139,92,246,1)"  };
-const COR_REATIVA  = { bg: "rgba(34,197,94,0.75)",   border: "rgba(34,197,94,1)"   };
+const COR_ATIVA    = { bg: "rgba(56,189,248,0.22)",  border: "rgba(56,189,248,0.85)"  };
+const COR_APARENTE = { bg: "rgba(139,92,246,0.22)",  border: "rgba(139,92,246,0.85)"  };
+const COR_REATIVA  = { bg: "rgba(34,197,94,0.22)",   border: "rgba(34,197,94,0.85)"   };
 
 /* ══════════════════════════════════════
    HELPERS GERAIS
@@ -719,13 +719,13 @@ function renderGraficoMisto(labels, valores, labelBarra, labelLinha, sufixo = ""
         {
           type:"bar", label:labelBarra, data:valores,
           borderWidth:1, borderRadius:4,
-          backgroundColor:"rgba(59,130,246,0.35)", borderColor:"rgba(59,130,246,0.9)"
+          backgroundColor:"rgba(56,189,248,0.18)", borderColor:"rgba(56,189,248,0.75)"
         },
         {
           type:"line", label:labelLinha, data:valores,
-          borderColor:"rgba(56,189,248,1)", backgroundColor:"rgba(56,189,248,1)",
+          borderColor:"rgba(56,189,248,0.90)", backgroundColor:"rgba(56,189,248,0.90)",
           borderWidth:2, pointRadius:4, pointHoverRadius:6,
-          pointBackgroundColor:"rgba(56,189,248,1)", pointBorderColor:"#ffffff",
+          pointBackgroundColor:"rgba(56,189,248,0.90)", pointBorderColor:"#ffffff",
           pointBorderWidth:1.5, tension:0.3, fill:false
         }
       ]
@@ -794,11 +794,11 @@ function renderGraficoMedicoes(modo) {
           type:"bar", label: campo === "tensao" ? "Tensão média (V)" : "Corrente média (A)",
           data: serie.map(i => +Number(i.valor).toFixed(2)),
           borderWidth:1, borderRadius:4,
-          backgroundColor:"rgba(139,92,246,0.28)", borderColor:"rgba(139,92,246,0.88)"
+          backgroundColor:"rgba(139,92,246,0.18)", borderColor:"rgba(139,92,246,0.75)"
         },
         {
           type:"line", label:"Tendência", data: serie.map(i => +Number(i.valor).toFixed(2)),
-          borderColor:"rgba(56,189,248,1)", borderWidth:2, pointRadius:3, tension:0.3, fill:false
+          borderColor:"rgba(56,189,248,0.90)", borderWidth:2, pointRadius:3, tension:0.3, fill:false
         }
       ]
     },
