@@ -650,3 +650,16 @@ html, body {
   .topbar-left h1 { font-size: 18px; }
 }
 
+.table-wrap {
+  max-height: 420px;
+  overflow-y: auto;
+  overflow-x: auto;
+}
+
+.table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: #1d2a3a;
+}
+
