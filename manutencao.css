@@ -651,7 +651,8 @@ html, body {
 }
 
 #page-potencia .table-wrap {
-  max-height: 360px;
+  height: 240px;
+  max-height: 240px;
   overflow-y: auto;
   overflow-x: auto;
   display: block;
@@ -665,7 +666,7 @@ html, body {
 #page-potencia #tableFases thead th {
   position: sticky;
   top: 0;
-  z-index: 5;
+  z-index: 10;
   background: #1b2a3a;
 }
 
