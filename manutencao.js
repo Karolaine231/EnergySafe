@@ -334,13 +334,9 @@ async function carregarDispositivos(quadroId = "") {
 }
 
 async function carregarConsumo() {
-  const localId  = $("local")?.value  || "";
-  const quadroId = $("quadro")?.value || "";
-  const sensorId = $("dispositivo")?.value || "";
-  const params = { skip:0, limit:500 };
-  if (sensorId)      params.sensor_id = sensorId;
-  else if (quadroId) params.quadro_id = quadroId;
-  else if (localId)  params.local_id  = localId;
+  const dispositivoId = $("selDispositivoConsumo")?.value || "";
+  const params = { limit: 500 };
+  if (dispositivoId) params.dispositivo_id = dispositivoId;
   const raw = await getJSON("/consumo/", params);
   const dados = Array.isArray(raw) ? raw : (raw?.dados ?? []);
   consumoCache = dados.map(adaptConsumo);
@@ -363,43 +359,115 @@ async function carregarMedicoesGerais() {
 }
 
 /**
- * Busca medições de um dispositivo filtrando por fase (A, B ou C).
- * GET /medicoes/?dispositivo_id=X&fase=Y&limit=20
- * Retorna apenas registros com algum valor útil.
+ * Busca medições de um canal específico.
+ * GET /medicoes/?canal_id=X&limit=20
  */
-async function carregarMedicoesPorFase(dispositivoId, fase) {
-  const params = { dispositivo_id: dispositivoId, fase, limit: 20 };
-  const raw = await getJSON("/medicoes/", params);
+async function carregarMedicoesPorCanal(canalId) {
+  const raw = await getJSON("/medicoes/", { canal_id: canalId, limit: 20 });
   return asArray(raw).map(adaptMedicao).filter(m =>
     m.valido || m.potencia > 0 || m.corrente > 0
   );
 }
 
 /**
- * Carrega as 3 fases (A, B, C) do dispositivo selecionado no filtro.
- * Se nenhum dispositivo selecionado, usa o primeiro da lista (dispositivo_id=1).
- * Cada fase é buscada em: GET /medicoes/?dispositivo_id=X&fase=A|B|C
+ * Preenche o select de dispositivos da página de Potência e da página de Consumo.
  */
-async function carregarDadosPotencia() {
-  // Dispositivo selecionado no filtro, ou o primeiro disponível (id=1)
-  const dispositivoFiltro = $("dispositivo")?.value || "";
-  const dispositivoId = dispositivoFiltro
-    ? Number(dispositivoFiltro)
-    : (todosDispositivosCache[0]?.id ?? 1);
+function preencherSelDispositivos() {
+  ["selDispositivoPotencia", "selDispositivoConsumo"].forEach(selId => {
+    const sel = $(selId); if (!sel) return;
+    const valorAtual = sel.value;
+    sel.innerHTML = `<option value="">Todos os dispositivos</option>`;
+    todosDispositivosCache.forEach(d => {
+      const o = document.createElement("option");
+      o.value = d.id;
+      o.textContent = d.nome + (d.ativo ? "" : " (inativo)");
+      sel.appendChild(o);
+    });
+    if (valorAtual) sel.value = valorAtual;
+  });
+}
 
-  // Busca as 3 fases em paralelo para o dispositivo selecionado
-  const fases = await Promise.all(
-    FASES.map(async fase => {
+/**
+ * Busca os canais de um dispositivo e retorna as fases com medições.
+ * GET /canais/?dispositivo_id=X  → para cada canal: GET /medicoes/?canal_id=Y
+ */
+async function carregarFasesDeDispositivo(dispositivoId, faseSelecionada) {
+  const LETRAS = ["A", "B", "C"];
+  const FASE_INDEX = { A: 0, B: 1, C: 2 };
+
+  let canais = [];
+  try {
+    canais = asArray(await getJSON("/canais/", { dispositivo_id: dispositivoId }));
+  } catch (e) {
+    console.warn(`Canais do dispositivo ${dispositivoId}:`, e);
+  }
+
+  if (!canais.length) {
+    try {
+      const raw = await getJSON("/medicoes/", { dispositivo_id: dispositivoId, limit: 60 });
+      const medicoes = asArray(raw).map(adaptMedicao).filter(m =>
+        m.valido || m.potencia > 0 || m.corrente > 0
+      );
+      return [{ dispositivo_id: dispositivoId, canal_id: null, fase: "A", label: "Fase A", medicoes }];
+    } catch { return []; }
+  }
+
+  const canaisFiltrados = faseSelecionada
+    ? canais.filter((_, i) => i === (FASE_INDEX[faseSelecionada] ?? i))
+    : canais;
+
+  const nomeDisp = todosDispositivosCache.find(d => d.id === dispositivoId)?.nome || `Disp ${dispositivoId}`;
+
+  return Promise.all(
+    canaisFiltrados.map(async (canal, i) => {
+      const canalId = canal.id ?? canal.canal_id;
+      const fase = faseSelecionada || LETRAS[canais.indexOf(canal)] || LETRAS[i];
+      const label = `${nomeDisp} Fase ${fase}`;
       try {
-        const medicoes = await carregarMedicoesPorFase(dispositivoId, fase);
-        return { dispositivo_id: dispositivoId, fase, label: `Fase ${fase}`, medicoes };
+        const medicoes = await carregarMedicoesPorCanal(canalId);
+        return { dispositivo_id: dispositivoId, canal_id: canalId, fase, label, medicoes };
       } catch {
-        return { dispositivo_id: dispositivoId, fase, label: `Fase ${fase}`, medicoes: [] };
+        return { dispositivo_id: dispositivoId, canal_id: canalId, fase, label, medicoes: [] };
       }
     })
   );
+}
 
-  return fases;
+/**
+ * Carrega dados de potência respeitando filtros de dispositivo e fase.
+ * - Sem dispositivo → busca todos e soma
+ * - Com dispositivo → só aquele
+ */
+async function carregarDadosPotencia() {
+  const selDisp = $("selDispositivoPotencia");
+  const selFase = $("selFasePotencia");
+
+  const dispositivoIdSel = selDisp?.value ? Number(selDisp.value) : null;
+  const faseSelecionada  = selFase?.value || "";
+
+  const subtitulo = $("potenciaSubtitulo");
+  if (subtitulo) {
+    const nomeDisp = dispositivoIdSel
+      ? (todosDispositivosCache.find(d => d.id === dispositivoIdSel)?.nome || `Dispositivo ${dispositivoIdSel}`)
+      : "Todos os dispositivos";
+    const labelFase = faseSelecionada ? `Fase ${faseSelecionada}` : "Todas as fases";
+    subtitulo.textContent = `${nomeDisp} · ${labelFase}`;
+  }
+
+  if (dispositivoIdSel) {
+    return carregarFasesDeDispositivo(dispositivoIdSel, faseSelecionada);
+  }
+
+  // Todos os dispositivos
+  const dispositivos = todosDispositivosCache.length
+    ? todosDispositivosCache
+    : asArray(await getJSON("/dispositivos/", { limit: 500 })).map(adaptDispositivo);
+
+  const todasFases = await Promise.all(
+    dispositivos.map(d => carregarFasesDeDispositivo(d.id, faseSelecionada).catch(() => []))
+  );
+
+  return todasFases.flat();
 }
 
 /* ══════════════════════════════════════
@@ -912,6 +980,12 @@ function configurarEventosUI() {
     const fases = await carregarDadosPotencia();
     renderGraficoTemporalPotencia(fases);
   });
+  $("selDispositivoPotencia")?.addEventListener("change", async () => await carregarPaginaPotencia());
+  $("selFasePotencia")?.addEventListener("change", async () => await carregarPaginaPotencia());
+  $("selDispositivoConsumo")?.addEventListener("change", async () => {
+    await carregarConsumo();
+    await carregarGraficoPrincipal();
+  });
   $("btnAplicar")?.addEventListener("click", async () => await carregarPainelCompleto());
   $("btnRefresh")?.addEventListener("click", async () => await carregarPainelCompleto());
   $("btnRefreshPotencia")?.addEventListener("click", async () => await carregarPaginaPotencia());
@@ -975,6 +1049,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     configurarExportacoes();
     await carregarLocais();
     await carregarTodosDispositivos();
+    preencherSelDispositivos();
     await carregarPainelCompleto();
   } catch (error) {
     console.error(error);
