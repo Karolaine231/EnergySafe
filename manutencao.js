@@ -235,12 +235,24 @@ function adaptMedicao(item) {
    HELPERS DE PERÍODO E AGRUPAMENTO
 ══════════════════════════════════════ */
 function filtrarConsumoPorPeriodo() {
-  const dias = Number($("intervalo")?.value || 30);
-  const ordenados = [...consumoCache].filter(i => i.data).sort((a,b) => a.data.localeCompare(b.data));
+  const periodo = $("intervalo")?.value || "7";
+  const ordenados = [...consumoCache]
+    .filter(i => i.data && /^\d{4}-\d{2}-\d{2}$/.test(String(i.data)))
+    .sort((a,b) => String(a.data).localeCompare(String(b.data)));
   if (!ordenados.length) return [];
   const ultima = ordenados[ordenados.length - 1].data;
+
+  // "24h" = só o último dia disponível
+  if (periodo === "24h") {
+    return ordenados.filter(i => i.data === ultima);
+  }
+
+  const dias = Number(periodo);
+  if (!dias || isNaN(dias)) return ordenados;
+
   const fim = new Date(`${ultima}T00:00:00`);
-  const ini = new Date(fim); ini.setDate(fim.getDate() - (dias - 1));
+  const ini = new Date(fim);
+  ini.setDate(fim.getDate() - (dias - 1));
   const iniStr = ini.toISOString().slice(0,10);
   return ordenados.filter(i => i.data >= iniStr && i.data <= ultima);
 }
@@ -254,18 +266,31 @@ function getConsumoAgrupadoPorData() {
 }
 
 function agruparSeriePorCampo(medicoes, campo) {
-  const dias = Number($("intervalo")?.value || 30);
+  const periodo = $("intervalo")?.value || "7";
   const lista = medicoes
     .map(i => ({ data: normalizeTimestamp(i.timestamp)?.slice(0,10), valor: Number(i[campo] || 0) }))
     .filter(i => i.data)
     .sort((a,b) => a.data.localeCompare(b.data));
   if (!lista.length) return [];
   const ultima = lista[lista.length-1].data;
-  const fim = new Date(`${ultima}T00:00:00`);
-  const ini = new Date(fim); ini.setDate(fim.getDate() - (dias-1));
-  const iniStr = ini.toISOString().slice(0,10);
+
+  let filtrada = [];
+  if (periodo === "24h") {
+    filtrada = lista.filter(i => i.data === ultima);
+  } else {
+    const dias = Number(periodo);
+    if (!dias || isNaN(dias)) {
+      filtrada = lista;
+    } else {
+      const fim = new Date(`${ultima}T00:00:00`);
+      const ini = new Date(fim);
+      ini.setDate(fim.getDate() - (dias - 1));
+      const iniStr = ini.toISOString().slice(0,10);
+      filtrada = lista.filter(i => i.data >= iniStr && i.data <= ultima);
+    }
+  }
   const bucket = new Map();
-  lista.filter(i => i.data >= iniStr && i.data <= ultima).forEach(i => {
+  filtrada.forEach(i => {
     const cur = bucket.get(i.data) || { soma:0, qtd:0 };
     cur.soma += i.valor; cur.qtd++;
     bucket.set(i.data, cur);
