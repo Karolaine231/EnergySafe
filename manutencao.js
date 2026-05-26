@@ -13,6 +13,7 @@ const TIPO_LABEL = {
   sobrecorrente: "Sobrecorrente"
 };
 
+
 const NIVEL_LABEL = { critico: "Crítico", aviso: "Aviso", info: "Informativo" };
 const NIVEL_CLASS = { critico: "danger", aviso: "warn", info: "" };
 
@@ -135,6 +136,15 @@ function formatTipo(tipo) {
 
 function formatNivel(nivel) {
   return NIVEL_LABEL[nivel] || nivel || "-";
+}
+
+function nomeSalaCurto(nome) {
+  if (!nome) return "-";
+
+  return String(nome)
+    .replace("ESP32_ADM0_A307", "Sala de Estudantes")
+    .replace("ESP32_ADM1_A301", "Sala dos Professores")
+    .replace("ESP32_ADM2_A302", "Sala da Coordenação");
 }
 
 /* ══════════════════════════════════════
@@ -701,14 +711,14 @@ function preencherTabelaFases(fases) {
     const m = ultimaMedicaoComPotencia(f.medicoes);
     const tr = document.createElement("tr");
     if (!m) {
-      tr.innerHTML = `<td><strong>${f.label}</strong></td><td colspan="7" style="color:rgba(234,240,255,.45)">Sem dados recentes</td>`;
+      tr.innerHTML = `<td><strong>${nomeSalaCurto(f.label)}</strong></td><td colspan="7" style="color:rgba(234,240,255,.45)">Sem dados recentes</td>`;
     } else {
       const ativa    = m.potencia_ativa    ?? m.potencia ?? 0;
       const aparente = m.potencia_aparente ?? m.potencia ?? 0;
       const reativa  = m.potencia_reativa  ?? 0;
       const fp       = m.fator_potencia    !== null ? m.fator_potencia.toFixed(3) : "—";
       tr.innerHTML = `
-        <td><strong>${f.label}</strong></td>
+        <td><strong>${nomeSalaCurto(f.label)}</strong></td>
         <td>${m.corrente.toFixed(2)} A</td>
         <td>${m.tensao.toFixed(1)} V</td>
         <td style="color:rgba(56,189,248,1)">${ativa.toFixed(0)} W</td>
