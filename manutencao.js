@@ -234,103 +234,54 @@ function adaptMedicao(item) {
 /* ══════════════════════════════════════
    HELPERS DE PERÍODO E AGRUPAMENTO
 ══════════════════════════════════════ */
-function getIntervaloConsumo() {
-  return $("intervalo")?.value || "7";
-}
-
 function filtrarConsumoPorPeriodo() {
-  const periodo = getIntervaloConsumo();
-
-  const ordenados = [...consumoCache]
-    .filter(i => i.data)
-    .sort((a,b) => String(a.data).localeCompare(String(b.data)));
-
+  const dias = Number($("intervalo")?.value || 30);
+  const ordenados = [...consumoCache].filter(i => i.data).sort((a,b) => a.data.localeCompare(b.data));
   if (!ordenados.length) return [];
-
   const ultima = ordenados[ordenados.length - 1].data;
-
-  // 24 horas = último dia disponível
-  if (periodo === "24h") {
-    return ordenados.filter(i => i.data === ultima);
-  }
-
-  const dias = Number(periodo || 7);
   const fim = new Date(`${ultima}T00:00:00`);
-  const ini = new Date(fim);
-  ini.setDate(fim.getDate() - (dias - 1));
-
+  const ini = new Date(fim); ini.setDate(fim.getDate() - (dias - 1));
   const iniStr = ini.toISOString().slice(0,10);
-
   return ordenados.filter(i => i.data >= iniStr && i.data <= ultima);
 }
 
 function getConsumoAgrupadoPorData() {
   const bucket = new Map();
-
   filtrarConsumoPorPeriodo().forEach(item => {
-    bucket.set(
-      item.data,
-      (bucket.get(item.data) || 0) + Number(item.kwh || 0)
-    );
+    bucket.set(item.data, (bucket.get(item.data) || 0) + Number(item.kwh || 0));
   });
-
-  return Array.from(bucket.entries())
-    .map(([data, kwh]) => ({ data, kwh }))
-    .sort((a,b) => a.data.localeCompare(b.data));
+  return Array.from(bucket.entries()).map(([data,kwh]) => ({ data, kwh })).sort((a,b) => a.data.localeCompare(b.data));
 }
 
 function agruparSeriePorCampo(medicoes, campo) {
-  const periodo = getIntervaloConsumo();
-
+  const dias = Number($("intervalo")?.value || 30);
   const lista = medicoes
-    .map(i => ({
-      data: normalizeTimestamp(i.timestamp)?.slice(0,10),
-      valor: Number(i[campo] || 0)
-    }))
+    .map(i => ({ data: normalizeTimestamp(i.timestamp)?.slice(0,10), valor: Number(i[campo] || 0) }))
     .filter(i => i.data)
     .sort((a,b) => a.data.localeCompare(b.data));
-
   if (!lista.length) return [];
-
-  const ultima = lista[lista.length - 1].data;
-
-  let filtrada = [];
-
-  if (periodo === "24h") {
-    filtrada = lista.filter(i => i.data === ultima);
-  } else {
-    const dias = Number(periodo || 7);
-    const fim = new Date(`${ultima}T00:00:00`);
-    const ini = new Date(fim);
-    ini.setDate(fim.getDate() - (dias - 1));
-
-    const iniStr = ini.toISOString().slice(0,10);
-    filtrada = lista.filter(i => i.data >= iniStr && i.data <= ultima);
-  }
-
+  const ultima = lista[lista.length-1].data;
+  const fim = new Date(`${ultima}T00:00:00`);
+  const ini = new Date(fim); ini.setDate(fim.getDate() - (dias-1));
+  const iniStr = ini.toISOString().slice(0,10);
   const bucket = new Map();
-
-  filtrada.forEach(i => {
-    const cur = bucket.get(i.data) || { soma: 0, qtd: 0 };
-    cur.soma += i.valor;
-    cur.qtd++;
+  lista.filter(i => i.data >= iniStr && i.data <= ultima).forEach(i => {
+    const cur = bucket.get(i.data) || { soma:0, qtd:0 };
+    cur.soma += i.valor; cur.qtd++;
     bucket.set(i.data, cur);
   });
-
   return Array.from(bucket.entries())
-    .map(([data, obj]) => ({
-      data,
-      valor: obj.qtd ? obj.soma / obj.qtd : 0
-    }))
+    .map(([data,obj]) => ({ data, valor: obj.qtd ? obj.soma/obj.qtd : 0 }))
     .sort((a,b) => a.data.localeCompare(b.data));
 }
+
 /* ══════════════════════════════════════
    CARREGAMENTO DE DADOS
 ══════════════════════════════════════ */
 async function carregarLocais() {
   const select = $("local"); if (!select) return;
   select.innerHTML = `<option value="">Carregando...</option>`;
-  locaisCache = asArray(await getJSON("/locais")).map(adaptLocal);
+  locaisCache = asArray(await getJSON("/locais/")).map(adaptLocal);
   select.innerHTML = `<option value="">Todos os locais</option>`;
   locaisCache.forEach(l => {
     const o = document.createElement("option");
@@ -348,7 +299,7 @@ async function carregarQuadros(localId = "") {
     select.innerHTML = `<option value="">Todos os quadros</option>`;
     return;
   }
-  quadrosCache = asArray(await getJSON("/quadros", { local_id: localId })).map(adaptQuadro);
+  quadrosCache = asArray(await getJSON("/quadros/", { local_id: localId })).map(adaptQuadro);
   select.innerHTML = `<option value="">Todos os quadros</option>`;
   quadrosCache.forEach(q => {
     const o = document.createElement("option");
@@ -359,7 +310,7 @@ async function carregarQuadros(localId = "") {
 
 async function carregarTodosDispositivos() {
   try {
-    todosDispositivosCache = asArray(await getJSON("/dispositivos", { limit: 500 })).map(adaptDispositivo);
+    todosDispositivosCache = asArray(await getJSON("/dispositivos/", { limit: 500 })).map(adaptDispositivo);
   } catch(e) {
     console.error("Erro ao carregar todos os dispositivos:", e);
   }
@@ -373,7 +324,7 @@ async function carregarDispositivos(quadroId = "") {
     select.innerHTML = `<option value="">Todos os dispositivos</option>`;
     return;
   }
-  dispositivosCache = asArray(await getJSON("/dispositivos", { quadro_id: quadroId })).map(adaptDispositivo);
+  dispositivosCache = asArray(await getJSON("/dispositivos/", { quadro_id: quadroId })).map(adaptDispositivo);
   select.innerHTML = `<option value="">Todos os dispositivos</option>`;
   dispositivosCache.forEach(d => {
     const o = document.createElement("option");
@@ -390,7 +341,7 @@ async function carregarConsumo() {
   if (sensorId)      params.sensor_id = sensorId;
   else if (quadroId) params.quadro_id = quadroId;
   else if (localId)  params.local_id  = localId;
-  const raw = await getJSON("/consumo", params);
+  const raw = await getJSON("/consumo/", params);
   const dados = Array.isArray(raw) ? raw : (raw?.dados ?? []);
   consumoCache = dados.map(adaptConsumo);
   return consumoCache;
@@ -412,123 +363,48 @@ async function carregarMedicoesGerais() {
 }
 
 /**
- * Busca as medições de um canal específico.
- * GET /medicoes/?canal_id=X&limit=20
+ * Busca medições de um dispositivo filtrando por fase (A, B ou C).
+ * GET /medicoes/?dispositivo_id=X&fase=Y&limit=20
+ * Retorna apenas registros com algum valor útil.
  */
-async function carregarMedicoesPorCanal(canalId) {
-  const raw = await getJSON("/medicoes/", { canal_id: canalId, limit: 20 });
+async function carregarMedicoesPorFase(dispositivoId, fase) {
+  const params = { dispositivo_id: dispositivoId, fase, limit: 20 };
+  const raw = await getJSON("/medicoes/", params);
   return asArray(raw).map(adaptMedicao).filter(m =>
     m.valido || m.potencia > 0 || m.corrente > 0
   );
 }
 
 /**
- * Preenche o select de dispositivos dedicado à página de Potência.
- * Chamado após carregarTodosDispositivos().
+ * Carrega as 3 fases (A, B, C) do dispositivo selecionado no filtro.
+ * Se nenhum dispositivo selecionado, usa o primeiro da lista (dispositivo_id=1).
+ * Cada fase é buscada em: GET /medicoes/?dispositivo_id=X&fase=A|B|C
  */
-function preencherSelDispositivoPotencia() {
-  const sel = $("selDispositivoPotencia"); if (!sel) return;
-  const valorAtual = sel.value;
-  // "Todos os dispositivos" é a opção padrão (value="")
-  sel.innerHTML = `<option value="">Todos os dispositivos</option>`;
-  todosDispositivosCache.forEach(d => {
-    const o = document.createElement("option");
-    o.value = d.id;
-    o.textContent = d.nome + (d.ativo ? "" : " (inativo)");
-    sel.appendChild(o);
-  });
-  if (valorAtual) sel.value = valorAtual;
-}
+async function carregarDadosPotencia() {
+  // Dispositivo selecionado no filtro, ou o primeiro disponível (id=1)
+  const dispositivoFiltro = $("dispositivo")?.value || "";
+  const dispositivoId = dispositivoFiltro
+    ? Number(dispositivoFiltro)
+    : (todosDispositivosCache[0]?.id ?? 1);
 
-/**
- * Busca os canais de um único dispositivo e retorna as fases com medições.
- */
-async function carregarFasesDeDispositivo(dispositivoId, faseSelecionada) {
-  const LETRAS = ["A", "B", "C"];
-  const FASE_INDEX = { A: 0, B: 1, C: 2 };
-
-  let canais = [];
-  try {
-    canais = asArray(await getJSON("/canais/", { dispositivo_id: dispositivoId }));
-  } catch (e) {
-    console.warn(`Canais do dispositivo ${dispositivoId}:`, e);
-  }
-
-  if (!canais.length) {
-    // Fallback: medições diretas pelo dispositivo
-    try {
-      const raw = await getJSON("/medicoes/", { dispositivo_id: dispositivoId, limit: 60 });
-      const medicoes = asArray(raw).map(adaptMedicao).filter(m =>
-        m.valido || m.potencia > 0 || m.corrente > 0
-      );
-      return [{ dispositivo_id: dispositivoId, canal_id: null, fase: "A", label: "Fase A", medicoes }];
-    } catch { return []; }
-  }
-
-  const canaisFiltrados = faseSelecionada
-    ? canais.filter((_, i) => i === (FASE_INDEX[faseSelecionada] ?? i))
-    : canais;
-
-  const nomeDisp = todosDispositivosCache.find(d => d.id === dispositivoId)?.nome || `Disp ${dispositivoId}`;
-
-  return Promise.all(
-    canaisFiltrados.map(async (canal, i) => {
-      const canalId = canal.id ?? canal.canal_id;
-      const fase = faseSelecionada || LETRAS[canais.indexOf(canal)] || LETRAS[i];
-      const label = `${nomeDisp} Fase ${fase}`;
+  // Busca as 3 fases em paralelo para o dispositivo selecionado
+  const fases = await Promise.all(
+    FASES.map(async fase => {
       try {
-        const medicoes = await carregarMedicoesPorCanal(canalId);
-        return { dispositivo_id: dispositivoId, canal_id: canalId, fase, label, medicoes };
+        const medicoes = await carregarMedicoesPorFase(dispositivoId, fase);
+        return { dispositivo_id: dispositivoId, fase, label: `Fase ${fase}`, medicoes };
       } catch {
-        return { dispositivo_id: dispositivoId, canal_id: canalId, fase, label, medicoes: [] };
+        return { dispositivo_id: dispositivoId, fase, label: `Fase ${fase}`, medicoes: [] };
       }
     })
   );
+
+  return fases;
 }
 
-/**
- * Carrega dados de potência.
- *
- * - Sem dispositivo selecionado → busca todos os dispositivos, soma tudo nos KPIs,
- *   exibe uma linha por fase por dispositivo na tabela.
- * - Com dispositivo selecionado → busca só aquele dispositivo.
- * - Com fase selecionada → filtra pelo índice do canal (0=A, 1=B, 2=C).
- */
-async function carregarDadosPotencia() {
-  const selDisp = $("selDispositivoPotencia");
-  const selFase = $("selFasePotencia");
-
-  const dispositivoIdSel = selDisp?.value ? Number(selDisp.value) : null;
-  const faseSelecionada  = selFase?.value || "";
-
-  // Atualiza subtítulo
-  const subtitulo = $("potenciaSubtitulo");
-  if (subtitulo) {
-    const nomeDisp = dispositivoIdSel
-      ? (todosDispositivosCache.find(d => d.id === dispositivoIdSel)?.nome || `Dispositivo ${dispositivoIdSel}`)
-      : "Todos os dispositivos";
-    const labelFase = faseSelecionada ? `Fase ${faseSelecionada}` : "Todas as fases";
-    subtitulo.textContent = `${nomeDisp} · ${labelFase}`;
-  }
-
-  if (dispositivoIdSel) {
-    // ── Um dispositivo específico ──
-    return carregarFasesDeDispositivo(dispositivoIdSel, faseSelecionada);
-  }
-
-  // ── Todos os dispositivos ──
-  const dispositivos = todosDispositivosCache.length
-    ? todosDispositivosCache
-    : asArray(await getJSON("/dispositivos/", { limit: 500 })).map(adaptDispositivo);
-
-  const todasFases = await Promise.all(
-    dispositivos.map(d => carregarFasesDeDispositivo(d.id, faseSelecionada).catch(() => []))
-  );
-
-  return todasFases.flat();
-}
-
-
+/* ══════════════════════════════════════
+   RESOLVER ALERTA
+══════════════════════════════════════ */
 async function resolverAlerta(alertaId, botao = null) {
   try {
     if (botao) { botao.disabled = true; botao.textContent = "Resolvendo..."; }
@@ -1036,12 +912,6 @@ function configurarEventosUI() {
     const fases = await carregarDadosPotencia();
     renderGraficoTemporalPotencia(fases);
   });
-  $("selDispositivoPotencia")?.addEventListener("change", async () => {
-    await carregarPaginaPotencia();
-  });
-  $("selFasePotencia")?.addEventListener("change", async () => {
-    await carregarPaginaPotencia();
-  });
   $("btnAplicar")?.addEventListener("click", async () => await carregarPainelCompleto());
   $("btnRefresh")?.addEventListener("click", async () => await carregarPainelCompleto());
   $("btnRefreshPotencia")?.addEventListener("click", async () => await carregarPaginaPotencia());
@@ -1105,7 +975,6 @@ document.addEventListener("DOMContentLoaded", async () => {
     configurarExportacoes();
     await carregarLocais();
     await carregarTodosDispositivos();
-    preencherSelDispositivoPotencia();
     await carregarPainelCompleto();
   } catch (error) {
     console.error(error);
