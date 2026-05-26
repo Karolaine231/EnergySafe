@@ -650,17 +650,34 @@ html, body {
   .topbar-left h1 { font-size: 18px; }
 }
 
-#page-potencia .table-wrap {
-  height: 240px;
-  max-height: 240px;
-  overflow-y: auto;
-  overflow-x: auto;
-  display: block;
+#page-potencia .card .table-wrap {
+  height: 180px !important;
+  max-height: 180px !important;
+  overflow-y: auto !important;
+  overflow-x: auto !important;
+
+  scrollbar-width: thin;
+  scrollbar-color: #2f455f #162334;
 }
 
-#page-potencia #tableFases {
-  width: 100%;
-  border-collapse: collapse;
+/* Chrome / Edge */
+#page-potencia .card .table-wrap::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+#page-potencia .card .table-wrap::-webkit-scrollbar-track {
+  background: #162334;
+  border-radius: 10px;
+}
+
+#page-potencia .card .table-wrap::-webkit-scrollbar-thumb {
+  background: #2f455f;
+  border-radius: 10px;
+}
+
+#page-potencia .card .table-wrap::-webkit-scrollbar-thumb:hover {
+  background: #3d5a78;
 }
 
 #page-potencia #tableFases thead th {
@@ -669,4 +686,3 @@ html, body {
   z-index: 10;
   background: #1b2a3a;
 }
-
