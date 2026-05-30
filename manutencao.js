@@ -153,9 +153,11 @@ let alertasCache           = [];
 let eventosCache           = [];
 let medicoesCache          = [];
 
-// Mapa: dispositivo_id → { canais: [], consumo: [] }
-// Preenchido por carregarConsumoTodosDispositivos()
 let consumoPorDispositivoCache = new Map();
+
+// Filtros customizados de data/hora
+let filtroCustomConsumo  = { inicio: null, fim: null, ativo: false };
+let filtroCustomMedicoes = { inicio: null, fim: null, ativo: false };
 
 /* ══════════════════════════════════════
    ADAPTADORES
@@ -236,13 +238,22 @@ function adaptMedicao(item) {
    HELPERS DE PERÍODO E AGRUPAMENTO
 ══════════════════════════════════════ */
 function filtrarConsumoPorPeriodo(lista) {
-  const periodo = $("intervalo")?.value || "20";
   const fonte = lista ?? consumoCache;
   const ordenados = [...fonte]
     .filter(i => i.data && /^\d{4}-\d{2}-\d{2}$/.test(String(i.data)))
-    .sort((a,b) => String(a.data).localeCompare(String(b.data)));
+    .sort((a, b) => String(a.data).localeCompare(String(b.data)));
   if (!ordenados.length) return [];
-  const ultima = ordenados[ordenados.length - 1].data;
+
+  // Filtro customizado tem prioridade sobre os quick filters
+  if (filtroCustomConsumo.ativo && filtroCustomConsumo.inicio && filtroCustomConsumo.fim) {
+    const ini = filtroCustomConsumo.inicio.slice(0, 10);
+    const fim = filtroCustomConsumo.fim.slice(0, 10);
+    return ordenados.filter(i => i.data >= ini && i.data <= fim);
+  }
+
+  // Quick filters originais
+  const periodo = $("intervalo")?.value || "20";
+  const ultima  = ordenados[ordenados.length - 1].data;
 
   if (periodo === "24h") {
     return ordenados.filter(i => i.data === ultima);
@@ -254,7 +265,7 @@ function filtrarConsumoPorPeriodo(lista) {
   const fim = new Date(`${ultima}T00:00:00`);
   const ini = new Date(fim);
   ini.setDate(fim.getDate() - (dias - 1));
-  const iniStr = ini.toISOString().slice(0,10);
+  const iniStr = ini.toISOString().slice(0, 10);
   return ordenados.filter(i => i.data >= iniStr && i.data <= ultima);
 }
 
@@ -267,38 +278,51 @@ function getConsumoAgrupadoPorData(lista) {
 }
 
 function agruparSeriePorCampo(medicoes, campo) {
-  const periodo = $("intervalo")?.value || "20";
   const lista = medicoes
-    .map(i => ({ data: normalizeTimestamp(i.timestamp)?.slice(0,10), valor: Number(i[campo] || 0) }))
+    .map(i => ({ data: normalizeTimestamp(i.timestamp)?.slice(0, 10), ts: i.timestamp, valor: Number(i[campo] || 0) }))
     .filter(i => i.data)
-    .sort((a,b) => a.data.localeCompare(b.data));
+    .sort((a, b) => a.data.localeCompare(b.data));
   if (!lista.length) return [];
-  const ultima = lista[lista.length-1].data;
 
   let filtrada = [];
-  if (periodo === "24h") {
-    filtrada = lista.filter(i => i.data === ultima);
+
+  // Filtro customizado de medições tem prioridade
+  if (filtroCustomMedicoes.ativo && filtroCustomMedicoes.inicio && filtroCustomMedicoes.fim) {
+    const ini = filtroCustomMedicoes.inicio;
+    const fim = filtroCustomMedicoes.fim;
+    filtrada = lista.filter(i => {
+      const ts = i.ts || (i.data + "T00:00:00");
+      return ts >= ini && ts <= fim;
+    });
   } else {
-    const dias = Number(periodo);
-    if (!dias || isNaN(dias)) {
-      filtrada = lista;
+    const periodo = $("intervalo")?.value || "20";
+    const ultima  = lista[lista.length - 1].data;
+
+    if (periodo === "24h") {
+      filtrada = lista.filter(i => i.data === ultima);
     } else {
-      const fim = new Date(`${ultima}T00:00:00`);
-      const ini = new Date(fim);
-      ini.setDate(fim.getDate() - (dias - 1));
-      const iniStr = ini.toISOString().slice(0,10);
-      filtrada = lista.filter(i => i.data >= iniStr && i.data <= ultima);
+      const dias = Number(periodo);
+      if (!dias || isNaN(dias)) {
+        filtrada = lista;
+      } else {
+        const fimD = new Date(`${ultima}T00:00:00`);
+        const iniD = new Date(fimD);
+        iniD.setDate(fimD.getDate() - (dias - 1));
+        const iniStr = iniD.toISOString().slice(0, 10);
+        filtrada = lista.filter(i => i.data >= iniStr && i.data <= ultima);
+      }
     }
   }
+
   const bucket = new Map();
   filtrada.forEach(i => {
-    const cur = bucket.get(i.data) || { soma:0, qtd:0 };
+    const cur = bucket.get(i.data) || { soma: 0, qtd: 0 };
     cur.soma += i.valor; cur.qtd++;
     bucket.set(i.data, cur);
   });
   return Array.from(bucket.entries())
-    .map(([data,obj]) => ({ data, valor: obj.qtd ? obj.soma/obj.qtd : 0 }))
-    .sort((a,b) => a.data.localeCompare(b.data));
+    .map(([data, obj]) => ({ data, valor: obj.qtd ? obj.soma / obj.qtd : 0 }))
+    .sort((a, b) => a.data.localeCompare(b.data));
 }
 
 /* ══════════════════════════════════════
@@ -360,12 +384,8 @@ async function carregarDispositivos(quadroId = "") {
 }
 
 /* ══════════════════════════════════════
-   CONSUMO — busca geral e por dispositivo
+   CONSUMO
 ══════════════════════════════════════ */
-
-/**
- * Retorna os canal_ids de um dispositivo, com fallback para o próprio id.
- */
 async function getCanaisDeDispositivo(dispositivoId) {
   try {
     const canais = asArray(await getJSON("/canais/", { dispositivo_id: dispositivoId }));
@@ -377,9 +397,6 @@ async function getCanaisDeDispositivo(dispositivoId) {
   return [Number(dispositivoId)];
 }
 
-/**
- * Busca consumo de uma lista de sensor_ids e retorna array de adaptConsumo.
- */
 async function fetchConsumoPorSensors(sensorIds) {
   if (!sensorIds.length) return [];
   const resultados = await Promise.all(
@@ -395,13 +412,8 @@ async function fetchConsumoPorSensors(sensorIds) {
   return resultados.flat();
 }
 
-/**
- * Carrega consumo global (usado pelo gráfico principal e KPIs gerais).
- * Preenche consumoCache.
- */
 async function carregarConsumo() {
   const dispositivoId = $("selDispositivoConsumo")?.value || "";
-
   let sensorIds = [];
 
   if (dispositivoId) {
@@ -421,10 +433,6 @@ async function carregarConsumo() {
   return consumoCache;
 }
 
-/**
- * Carrega consumo individual por dispositivo e preenche consumoPorDispositivoCache.
- * Chamado uma vez na inicialização e no refresh geral.
- */
 async function carregarConsumoPorTodosDispositivos() {
   consumoPorDispositivoCache.clear();
   const todos = todosDispositivosCache.length
@@ -551,9 +559,48 @@ async function carregarDadosPotencia() {
 }
 
 /* ══════════════════════════════════════
+   MODAL DE CONFIRMAÇÃO
+══════════════════════════════════════ */
+function abrirModalConfirmacao(alertaId) {
+  return new Promise(resolve => {
+    const overlay    = $("modalConfirm");
+    const btnConfirm = $("modalBtnConfirm");
+    const btnCancel  = $("modalBtnCancel");
+
+    // Atualiza descrição com dados do alerta
+    const alerta = alertasCache.find(a => String(a.id) === String(alertaId));
+    const desc = $("modalDesc");
+    if (desc && alerta) {
+      desc.textContent = `Alerta: "${alerta.mensagem || formatTipo(alerta.tipo)}" — confirmar resolução? Esta ação não pode ser desfeita.`;
+    }
+
+    overlay.classList.add("open");
+
+    function fechar(resultado) {
+      overlay.classList.remove("open");
+      btnConfirm.removeEventListener("click", onConfirm);
+      btnCancel.removeEventListener("click", onCancel);
+      overlay.removeEventListener("click", onOverlayClick);
+      resolve(resultado);
+    }
+
+    function onConfirm()        { fechar(true);  }
+    function onCancel()         { fechar(false); }
+    function onOverlayClick(e)  { if (e.target === overlay) fechar(false); }
+
+    btnConfirm.addEventListener("click", onConfirm);
+    btnCancel.addEventListener("click", onCancel);
+    overlay.addEventListener("click", onOverlayClick);
+  });
+}
+
+/* ══════════════════════════════════════
    RESOLVER ALERTA
 ══════════════════════════════════════ */
 async function resolverAlerta(alertaId, botao = null) {
+  const confirmado = await abrirModalConfirmacao(alertaId);
+  if (!confirmado) return;
+
   try {
     if (botao) { botao.disabled = true; botao.textContent = "Resolvendo..."; }
     const response = await fetch(`${API_BASE}/alertas/${alertaId}/resolver`, {
@@ -572,7 +619,6 @@ async function resolverAlerta(alertaId, botao = null) {
 
 /* ══════════════════════════════════════
    KPIs E TABELA DE DISPOSITIVOS
-   ← CORRIGIDO: consumo individual por dispositivo
 ══════════════════════════════════════ */
 function carregarKPIsETabela() {
   const dispositivoIdFiltro = $("dispositivo")?.value || "";
@@ -591,7 +637,6 @@ function carregarKPIsETabela() {
   if (!tbody) return;
   tbody.innerHTML = "";
 
-  // Fonte de dispositivos a exibir
   const fonte = dispositivosCache.length ? dispositivosCache : todosDispositivosCache;
 
   if (!fonte.length) {
@@ -603,14 +648,10 @@ function carregarKPIsETabela() {
   if (dispositivoIdFiltro) lista = lista.filter(d => String(d.id) === String(dispositivoIdFiltro));
 
   lista.forEach(d => {
-    // Pega o consumo específico desse dispositivo no cache individual
-    const consumoDisp = consumoPorDispositivoCache.get(d.id) ?? [];
-
-    // Aplica o mesmo filtro de período que o restante do painel
+    const consumoDisp  = consumoPorDispositivoCache.get(d.id) ?? [];
     const agrupadoDisp = getConsumoAgrupadoPorData(consumoDisp);
-
-    const totalDisp = agrupadoDisp.reduce((s, i) => s + i.kwh, 0);
-    const ultimaData = agrupadoDisp.length ? agrupadoDisp[agrupadoDisp.length - 1].data : null;
+    const totalDisp    = agrupadoDisp.reduce((s, i) => s + i.kwh, 0);
+    const ultimaData   = agrupadoDisp.length ? agrupadoDisp[agrupadoDisp.length - 1].data : null;
 
     const tr = document.createElement("tr");
     tr.innerHTML = `
@@ -640,7 +681,7 @@ function carregarAlertasUI() {
     ul.innerHTML = `<li class="alert-item"><p>Nenhum alerta pendente.</p></li>`;
     return;
   }
-  ativos.slice(0,12).forEach(alerta => {
+  ativos.slice(0, 12).forEach(alerta => {
     const li = document.createElement("li");
     li.className = "alert-item";
     const nivelClass = NIVEL_CLASS[String(alerta.nivel||"").toLowerCase()] || "";
@@ -675,25 +716,24 @@ function carregarEventos() {
     return;
   }
   const dispLabel = nomeDispositivoHistorico();
-  historico.slice(0,50).forEach(evento => {
+  historico.slice(0, 50).forEach(evento => {
     const tr = document.createElement("tr");
     tr.innerHTML = `
       <td>${formatDt(evento.timestamp)}</td>
       <td>${formatTipo(evento.tipo)}</td>
-      <td><span class="tag ${NIVEL_CLASS[evento.nivel]||""}">${formatNivel(evento.nivel)}</span></td>
+      <td><span class="tag ${NIVEL_CLASS[evento.nivel] || ""}">${formatNivel(evento.nivel)}</span></td>
       <td>${dispLabel}</td>
-      <td>${evento.mensagem || `Valor ${evento.valor||0} / Limite ${evento.limite||0}`}</td>
-      <td><span class="tag ${evento.resolvido ? "" : "warn"}">${evento.resolvido ? "Resolvido" : "Pendente"}</span></td>
-      <td>${evento.resolvido
-        ? `<span class="sem-acao">Sem ação</span>`
-        : `<button class="btn-resolver" data-id="${evento.id}">Resolver</button>`
-      }</td>
+      <td>${evento.mensagem || `Valor ${evento.valor || 0} / Limite ${evento.limite || 0}`}</td>
+      <td>
+        <span class="status-badge ${evento.resolvido ? "resolved" : "pending"}">
+          ${evento.resolvido ? "Resolvido" : "Pendente"}
+        </span>
+      </td>
+      <td><span class="sem-acao">Sem ação</span></td>
     `;
     tbody.appendChild(tr);
   });
-  tbody.querySelectorAll(".btn-resolver").forEach(btn => {
-    btn.addEventListener("click", () => resolverAlerta(btn.dataset.id, btn));
-  });
+  // Histórico é somente leitura — sem botão Resolver aqui
 }
 
 /* ══════════════════════════════════════
@@ -846,7 +886,7 @@ function preencherTabelaFases(fases) {
   const tbody = $("tbodyFases"); if (!tbody) return;
   tbody.innerHTML = "";
   if (!fases.length || fases.every(f => !f.medicoes.length)) {
-    tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:rgba(234,240,255,.45)">Nenhuma medição encontrada. Verifique a conexão dos dispositivos.</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:rgba(234,240,255,.45)">Nenhuma medição encontrada.</td></tr>`;
     return;
   }
   fases.forEach(f => {
@@ -886,9 +926,9 @@ function renderGraficoBarrasFases(fases) {
     data: {
       labels,
       datasets: [
-        { label:"Ativa (W)",      data:dadosAtiva,    backgroundColor:COR_ATIVA.bg,    borderColor:COR_ATIVA.border,    borderWidth:1, borderRadius:6 },
-        { label:"Aparente (VA)",  data:dadosAparente, backgroundColor:COR_APARENTE.bg, borderColor:COR_APARENTE.border, borderWidth:1, borderRadius:6 },
-        { label:"Reativa (VAr)",  data:dadosReativa,  backgroundColor:COR_REATIVA.bg,  borderColor:COR_REATIVA.border,  borderWidth:1, borderRadius:6 }
+        { label:"Ativa (W)",     data:dadosAtiva,    backgroundColor:COR_ATIVA.bg,    borderColor:COR_ATIVA.border,    borderWidth:1, borderRadius:6 },
+        { label:"Aparente (VA)", data:dadosAparente, backgroundColor:COR_APARENTE.bg, borderColor:COR_APARENTE.border, borderWidth:1, borderRadius:6 },
+        { label:"Reativa (VAr)", data:dadosReativa,  backgroundColor:COR_REATIVA.bg,  borderColor:COR_REATIVA.border,  borderWidth:1, borderRadius:6 }
       ]
     },
     options: {
@@ -984,7 +1024,7 @@ async function carregarPainelCompleto() {
     await Promise.all([
       carregarConsumo(),
       carregarAlertasAPI(),
-      carregarConsumoPorTodosDispositivos()   // ← garante cache individual atualizado
+      carregarConsumoPorTodosDispositivos()
     ]);
     medicoesCache = [];
     carregarKPIsETabela();
@@ -1032,6 +1072,138 @@ function configurarExportacoes() {
       nomeDispositivoHistorico(), e.mensagem || "—", e.resolvido ? "Resolvido" : "Pendente"
     ]));
     exportCsv("eventos_manutencao.csv", rows);
+  });
+}
+
+/* ══════════════════════════════════════
+   FILTROS DE DATA CUSTOMIZADOS
+══════════════════════════════════════ */
+function configurarFiltrosData() {
+
+  function toggleAccordion(accordion, btn) {
+    const aberto = accordion.classList.contains("open");
+    accordion.classList.toggle("open", !aberto);
+    btn.classList.toggle("active", !aberto);
+  }
+
+  function formatarIntervalo(inicio, fim) {
+    const fmt = s => s.replace("T", " ").slice(0, 16);
+    return `${fmt(inicio)} → ${fmt(fim)}`;
+  }
+
+  function atualizarBadge(badgeEl, textoEl, ativo, inicio, fim) {
+    if (!badgeEl) return;
+    badgeEl.style.display = ativo ? "inline-flex" : "none";
+    if (textoEl && ativo) textoEl.textContent = formatarIntervalo(inicio, fim);
+  }
+
+  /* ── CONSUMO ── */
+  const btnToggleConsumo  = $("btnToggleFiltroConsumo");
+  const accordionConsumo  = $("accordionConsumo");
+  const btnAplicarConsumo = $("btnAplicarFiltroConsumo");
+  const btnLimparConsumo  = $("btnLimparFiltroConsumo");
+  const clearBadgeConsumo = $("clearFiltroConsumo");
+  const badgeConsumo      = $("badgeFiltroConsumo");
+  const badgeConsumoTxt   = $("badgeFiltroConsumoTexto");
+  const periodWrap        = $("periodSelectWrap");
+
+  btnToggleConsumo?.addEventListener("click", () => {
+    toggleAccordion(accordionConsumo, btnToggleConsumo);
+  });
+
+  btnAplicarConsumo?.addEventListener("click", async () => {
+    const inicio = $("consumoDataInicio")?.value;
+    const fim    = $("consumoDataFim")?.value;
+    if (!inicio || !fim) { showFeedback("Preencha data/hora de início e fim.", "warn"); return; }
+    if (inicio >= fim)   { showFeedback("A data de início deve ser anterior à data de fim.", "warn"); return; }
+
+    filtroCustomConsumo = { inicio, fim, ativo: true };
+    periodWrap?.classList.add("dimmed");
+    accordionConsumo?.classList.remove("open");
+    btnToggleConsumo?.classList.remove("active");
+    atualizarBadge(badgeConsumo, badgeConsumoTxt, true, inicio, fim);
+    showFeedback(`Filtro aplicado: ${formatarIntervalo(inicio, fim)}`, "info");
+    await carregarConsumo();
+    await carregarGraficoPrincipal();
+    carregarKPIsETabela();
+  });
+
+  function limparFiltroConsumo() {
+    filtroCustomConsumo = { inicio: null, fim: null, ativo: false };
+    if ($("consumoDataInicio")) $("consumoDataInicio").value = "";
+    if ($("consumoDataFim"))    $("consumoDataFim").value    = "";
+    periodWrap?.classList.remove("dimmed");
+    atualizarBadge(badgeConsumo, badgeConsumoTxt, false, null, null);
+    accordionConsumo?.classList.remove("open");
+    btnToggleConsumo?.classList.remove("active");
+  }
+
+  btnLimparConsumo?.addEventListener("click", async () => {
+    limparFiltroConsumo();
+    await carregarConsumo();
+    await carregarGraficoPrincipal();
+    carregarKPIsETabela();
+  });
+
+  clearBadgeConsumo?.addEventListener("click", async () => {
+    limparFiltroConsumo();
+    await carregarConsumo();
+    await carregarGraficoPrincipal();
+    carregarKPIsETabela();
+  });
+
+  /* ── MEDIÇÕES ── */
+  const btnToggleMedicoes  = $("btnToggleFiltroMedicoes");
+  const accordionMedicoes  = $("accordionMedicoes");
+  const btnAplicarMedicoes = $("btnAplicarFiltroMedicoes");
+  const btnLimparMedicoes  = $("btnLimparFiltroMedicoes");
+  const clearBadgeMedicoes = $("clearFiltroMedicoes");
+  const badgeMedicoes      = $("badgeFiltroMedicoes");
+  const badgeMedicoesTxt   = $("badgeFiltroMedicoesTexto");
+
+  btnToggleMedicoes?.addEventListener("click", () => {
+    toggleAccordion(accordionMedicoes, btnToggleMedicoes);
+  });
+
+  btnAplicarMedicoes?.addEventListener("click", () => {
+    const inicio = $("medicoesDataInicio")?.value;
+    const fim    = $("medicoesDataFim")?.value;
+    if (!inicio || !fim) { showFeedback("Preencha data/hora de início e fim.", "warn"); return; }
+    if (inicio >= fim)   { showFeedback("A data de início deve ser anterior à data de fim.", "warn"); return; }
+
+    filtroCustomMedicoes = { inicio, fim, ativo: true };
+    accordionMedicoes?.classList.remove("open");
+    btnToggleMedicoes?.classList.remove("active");
+    atualizarBadge(badgeMedicoes, badgeMedicoesTxt, true, inicio, fim);
+    showFeedback(`Filtro aplicado: ${formatarIntervalo(inicio, fim)}`, "info");
+    const modo = $("chartModeMedicoes")?.value || "tensao";
+    renderGraficoMedicoes(modo);
+  });
+
+  function limparFiltroMedicoes() {
+    filtroCustomMedicoes = { inicio: null, fim: null, ativo: false };
+    if ($("medicoesDataInicio")) $("medicoesDataInicio").value = "";
+    if ($("medicoesDataFim"))    $("medicoesDataFim").value    = "";
+    atualizarBadge(badgeMedicoes, badgeMedicoesTxt, false, null, null);
+    accordionMedicoes?.classList.remove("open");
+    btnToggleMedicoes?.classList.remove("active");
+  }
+
+  btnLimparMedicoes?.addEventListener("click", () => {
+    limparFiltroMedicoes();
+    const modo = $("chartModeMedicoes")?.value || "tensao";
+    renderGraficoMedicoes(modo);
+  });
+
+  clearBadgeMedicoes?.addEventListener("click", () => {
+    limparFiltroMedicoes();
+    const modo = $("chartModeMedicoes")?.value || "tensao";
+    renderGraficoMedicoes(modo);
+  });
+
+  /* Trocar quick filter limpa o filtro customizado de consumo */
+  $("intervalo")?.addEventListener("change", () => {
+    if (filtroCustomConsumo.ativo) limparFiltroConsumo();
   });
 }
 
@@ -1137,6 +1309,7 @@ document.addEventListener("DOMContentLoaded", async () => {
     configurarNavegacao();
     configurarEventosUI();
     configurarExportacoes();
+    configurarFiltrosData();
     await carregarLocais();
     await carregarTodosDispositivos();
     preencherSelDispositivos();
