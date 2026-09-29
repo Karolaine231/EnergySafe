@@ -16,8 +16,6 @@ firmware/
 │   └── EnergySafe_ADM01.ino    # Módulo ADM01 → canais 4, 5, 6
 ├── EnergySafe_ADM02/
 │   └── EnergySafe_ADM02.ino    # Módulo ADM02 → canais 7, 8, 9
-├── teste_sd_placa/
-│   └── teste_sd_placa.ino      # Teste do cartão SD na placa EnergySafe
 └── README.md
 ```
 
@@ -81,8 +79,6 @@ O firmware **não usa bibliotecas externas**. Desde a v5.0.6, o JSON é montado 
 
 **Configuração na Arduino IDE:** placa `ESP32 Dev Module`, Monitor Serial em `115200`. O código funciona com os cores 2.x e 3.x.
 
-> Os avisos `A categoria '...' na biblioteca ... é invalida` e `Invalid version found` que aparecem na compilação são da própria IDE e podem ser ignorados.
-
 ---
 
 ## ⚙️ Configuração
@@ -111,8 +107,6 @@ const int CANAL_IDS[3] = {1, 2, 3};
 | ADM02 | `"ADM02"` | `{7, 8, 9}` |
 
 > Os IDs precisam existir no backend (`GET /canais/` em `/docs`). Confira antes de gravar.
-
-> 🔒 **Não suba senhas reais para o GitHub.** Antes do commit, troque `WIFI_SSID` e `WIFI_PASSWORD` por valores genéricos.
 
 > 🌐 A rede da instituição libera o acesso **por endereço MAC**. O firmware mostra o MAC logo no boot (`MAC do ESP32: ...`). Se a placa ou o ESP forem trocados, o novo MAC precisa ser liberado.
 
