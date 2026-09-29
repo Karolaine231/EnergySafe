@@ -1,339 +1,221 @@
-// =============================================================
-//  EnergySafe — Calibração Interativa de Corrente e Tensão
-//  ESP32 + SCT-013-000 + Divisor Resistivo de Tensão
-//
-//  Como usar:
-//    1. Grave este sketch no ESP32
-//    2. Abra o Serial Monitor a 115200 baud
-//    3. Siga as instruções na tela
-//    4. Copie os valores de CALIBRATION_GAIN e VOLTAGE_GAIN
-//       gerados ao final para o seu config.h
-// =============================================================
+/*
+============================================================
+EnergySafe — Calibração dos sensores
+============================================================
+Usa o mesmo processamento do firmware v5.0.6 (2 kHz, janela
+de 10 ciclos, remoção de DC por EMA, filtro passa-baixa,
+CT_RATIO e BURDEN). Os ganhos daqui valem direto no firmware.
 
-#include <Arduino.h>
-#include <math.h>
+Também descobre QUAL sensor de tensão (VP ou VN) está no mesmo
+circuito de cada sensor de corrente: com carga resistiva, o par
+certo dá fator de potência ≈ 1.
 
-// ===================== PINOS =====================
-#define ADC_PIN_CURRENT   34    // Corrente — SCT-013 + burden 33Ω
-#define ADC_PIN_VOLTAGE   35    // Tensão   — divisor resistivo na PCB
-                                // ⚠️ Ajuste para o pino real da placa!
+COMO USAR (Monitor Serial 115200, "Nova linha" ativado):
+  1. Ligue uma carga resistiva (chaleira, aquecedor, secador)
+     e meça com alicate amperímetro e multímetro.
+  2. Digite os valores REAIS medidos:
+        vp 220     -> tensão real no ZMPT do VP (GPIO36)
+        vn 127     -> tensão real no ZMPT do VN (GPIO39)
+        i1 4.83    -> corrente real no sensor de corrente 1 (GPIO34)
+        i2 4.83    -> sensor 2 (GPIO35)
+        i3 4.83    -> sensor 3 (GPIO32)
+  3. Digite  p  para imprimir as linhas prontas para colar no
+     bloco CONFIGURAÇÕES do firmware (ganhos + CANAL_VSENSOR_IDX).
+============================================================
+*/
 
-// ===================== ADC =====================
-#define ADC_BITS          12
-#define ADC_VREF          3.3f
-#define ADC_MAX           4095.0f
+// ─── Pinos (iguais ao firmware) ────────────────────────────
+const int PINO_CORRENTE[3] = {34, 35, 32};
+const int PINO_VSENSOR[2]  = {36, 39};    // VP, VN
 
-// ===================== SENSOR DE CORRENTE =====================
-#define CT_RATIO          2000.0f   // SCT-013-000: 100A:50mA → 2000:1
-#define BURDEN_OHMS       33.0f     // Resistor burden da placa
+// ─── Constantes (iguais ao firmware) ───────────────────────
+const float CT_RATIO    = 2000.0f;
+const float BURDEN_OHMS = 33.0f;
 
-// ===================== AMOSTRAGEM =====================
-#define SAMPLE_RATE_HZ    2000
-#define WINDOW_MS         1000
-#define NUM_SAMPLES       (SAMPLE_RATE_HZ * WINDOW_MS / 1000)  // 2000 amostras
+// Ganhos iniciais — coloque aqui os valores atuais do firmware
+float CAL_GAIN_I[3] = {1.0f, 1.0f, 1.0f};
+float CAL_GAIN_V[2] = {234.26f, 234.26f};
 
-// ===================== CALIBRAÇÃO (ajustados ao final) =====================
-float CALIBRATION_GAIN_CURRENT = 1.0f;  // gain da corrente
-float CALIBRATION_GAIN_VOLTAGE = 1.0f;  // gain da tensão
+#define ADC_VREF         3.3f
+#define ADC_FULL_SCALE   4095.0f
+#define SAMPLE_RATE_HZ   2000
+#define SAMPLE_PERIOD_US (1000000 / SAMPLE_RATE_HZ)
+#define WINDOW_SAMPLES   (SAMPLE_RATE_HZ / 60 * 10)
+#define DC_ALPHA         0.001f
+#define JANELAS_MEDIA    4          // média de 4 janelas por leitura
+#define I_MIN_PAREAMENTO 0.2f       // corrente mínima para sugerir o par
 
-// ===================== VARIÁVEIS GLOBAIS =====================
-float measuredIrms   = 0.0f;
-float measuredVrms   = 0.0f;
-float referenceIrms  = 0.0f;
-float referenceVrms  = 0.0f;
+float dcV[2], dcI[3];
 
-// =============================================================
-//  Lê RMS de corrente no ADC_PIN_CURRENT
-//  Retorna valor em Ampères (antes do gain de calibração)
-// =============================================================
-float readCurrentRms() {
-  long   sumSq    = 0;
-  int    offset   = 2048;  // ponto médio 12 bits
-  float  vPerBit  = ADC_VREF / ADC_MAX;
+// Resultados sem ganho
+float vrmsBruto[2];
+float irmsBruto[3];
+double pBruto[3][2];                // P bruta da corrente c com o sensor s
 
-  // --- Estimativa automática do offset (média das amostras) ---
-  long sumOffset = 0;
-  for (int i = 0; i < NUM_SAMPLES; i++) {
-    sumOffset += analogRead(ADC_PIN_CURRENT);
-    delayMicroseconds(1000000 / SAMPLE_RATE_HZ);
-  }
-  offset = sumOffset / NUM_SAMPLES;
+int adcMinV[2], adcMaxV[2], adcMinI[3], adcMaxI[3];
 
-  // --- Coleta RMS ---
-  for (int i = 0; i < NUM_SAMPLES; i++) {
-    int raw   = analogRead(ADC_PIN_CURRENT) - offset;
-    long v    = raw;
-    sumSq    += v * v;
-    delayMicroseconds(1000000 / SAMPLE_RATE_HZ);
-  }
+// ─────────────────────────────────────────────────────────
+// Mede o sensor de corrente c junto com OS DOIS sensores de tensão
+void medirCanal(int c) {
+    double sV2[2] = {0, 0}, sVI[2] = {0, 0}, sI2 = 0;
+    long nTot = 0;
+    adcMinI[c] = 4095; adcMaxI[c] = 0;
+    for (int s = 0; s < 2; s++) { adcMinV[s] = 4095; adcMaxV[s] = 0; }
 
-  float vrmsADC = sqrt((float)sumSq / NUM_SAMPLES) * vPerBit;  // Vrms no ADC (V)
-  float irmsSecondary = vrmsADC / BURDEN_OHMS;                  // Irms secundário (A)
-  float irms = irmsSecondary * CT_RATIO;                        // Irms primário (A)
-  return irms;
+    for (int j = 0; j < JANELAS_MEDIA; j++) {
+        float antV[2] = {0, 0}, antI = 0;
+        for (int n = 0; n < WINDOW_SAMPLES; n++) {
+            unsigned long t0 = micros();
+
+            int rawI = analogRead(PINO_CORRENTE[c]);
+            int rawV[2];
+            rawV[0] = analogRead(PINO_VSENSOR[0]);
+            rawV[1] = analogRead(PINO_VSENSOR[1]);
+
+            adcMinI[c] = min(adcMinI[c], rawI); adcMaxI[c] = max(adcMaxI[c], rawI);
+
+            float aI = rawI * (ADC_VREF / ADC_FULL_SCALE);
+            dcI[c] = (1.0f - DC_ALPHA) * dcI[c] + DC_ALPHA * aI;
+            float i = aI - dcI[c];
+            if (n > 0) i = 0.5f * (i + antI);          // mesmo filtro do firmware
+            antI = i;
+            float iA = i / BURDEN_OHMS * CT_RATIO;
+            sI2 += (double)iA * iA;
+
+            for (int s = 0; s < 2; s++) {
+                adcMinV[s] = min(adcMinV[s], rawV[s]);
+                adcMaxV[s] = max(adcMaxV[s], rawV[s]);
+                float aV = rawV[s] * (ADC_VREF / ADC_FULL_SCALE);
+                dcV[s] = (1.0f - DC_ALPHA) * dcV[s] + DC_ALPHA * aV;
+                float v = aV - dcV[s];
+                if (n > 0) v = 0.5f * (v + antV[s]);
+                antV[s] = v;
+                sV2[s] += (double)v * v;
+                sVI[s] += (double)v * iA;
+            }
+            nTot++;
+
+            long resta = (long)SAMPLE_PERIOD_US - (long)(micros() - t0);
+            if (resta > 0) delayMicroseconds(resta);
+        }
+    }
+
+    irmsBruto[c] = sqrt(sI2 / nTot);
+    for (int s = 0; s < 2; s++) {
+        vrmsBruto[s] = sqrt(sV2[s] / nTot);
+        pBruto[c][s] = sVI[s] / nTot;
+    }
 }
 
-// =============================================================
-//  Lê RMS de tensão no ADC_PIN_VOLTAGE
-//  Retorna valor em Volts (antes do gain de calibração)
-//  ⚠️ Ajuste VOLTAGE_DIVIDER_FACTOR conforme os resistores da PCB
-// =============================================================
-float readVoltageRms() {
-  // Fator do divisor resistivo: Vin_real = Vadc * (R1 + R2) / R2
-  // Exemplo: R1=470kΩ, R2=1kΩ → fator ≈ 471
-  // ⚠️ AJUSTE ESTE VALOR conforme os resistores reais da sua placa!
-  const float VOLTAGE_DIVIDER_FACTOR = 471.0f;
-
-  long  sumSq   = 0;
-  int   offset  = 2048;
-  float vPerBit = ADC_VREF / ADC_MAX;
-
-  // --- Offset automático ---
-  long sumOffset = 0;
-  for (int i = 0; i < NUM_SAMPLES; i++) {
-    sumOffset += analogRead(ADC_PIN_VOLTAGE);
-    delayMicroseconds(1000000 / SAMPLE_RATE_HZ);
-  }
-  offset = sumOffset / NUM_SAMPLES;
-
-  // --- Coleta RMS ---
-  for (int i = 0; i < NUM_SAMPLES; i++) {
-    int  raw  = analogRead(ADC_PIN_VOLTAGE) - offset;
-    long v    = raw;
-    sumSq    += v * v;
-    delayMicroseconds(1000000 / SAMPLE_RATE_HZ);
-  }
-
-  float vrmsADC = sqrt((float)sumSq / NUM_SAMPLES) * vPerBit;
-  float vrms    = vrmsADC * VOLTAGE_DIVIDER_FACTOR;
-  return vrms;
+// FP da corrente c usando o sensor de tensão s (independe dos ganhos)
+float fpPar(int c, int s) {
+    float den = vrmsBruto[s] * irmsBruto[c];
+    return (den > 1e-9f) ? (float)(pBruto[c][s] / den) : 0.0f;
 }
 
-// =============================================================
-//  Aguarda o usuário digitar um número float no Serial
-// =============================================================
-float waitForFloat(const char* prompt) {
-  Serial.println();
-  Serial.print("  ➤  ");
-  Serial.print(prompt);
-  Serial.print(": ");
-
-  while (!Serial.available()) { delay(50); }
-  float val = Serial.parseFloat();
-  // Limpa buffer
-  while (Serial.available()) Serial.read();
-  Serial.println(val, 3);
-  return val;
+// Sugestão de par: sensor com |FP| maior (-1 = corrente baixa demais)
+int sugerirPar(int c) {
+    if (irmsBruto[c] * CAL_GAIN_I[c] < I_MIN_PAREAMENTO) return -1;
+    return (fabsf(fpPar(c, 0)) >= fabsf(fpPar(c, 1))) ? 0 : 1;
 }
 
-// =============================================================
-//  Imprime linha separadora
-// =============================================================
-void linha(char c = '-', int n = 56) {
-  for (int i = 0; i < n; i++) Serial.print(c);
-  Serial.println();
+void imprimirConstantes() {
+    int par[3];
+    for (int c = 0; c < 3; c++) par[c] = sugerirPar(c);
+
+    Serial.println("\n----- COLE NO FIRMWARE (bloco CONFIGURACOES) -----");
+    Serial.printf("const int CANAL_VSENSOR_IDX[3] = {%d, %d, %d};  // corrente 1, 2, 3\n",
+                  par[0] < 0 ? 0 : par[0], par[1] < 0 ? 1 : par[1], par[2] < 0 ? 1 : par[2]);
+    Serial.printf("const float CAL_GAIN_I[3] = {%.4ff, %.4ff, %.4ff};\n",
+                  CAL_GAIN_I[0], CAL_GAIN_I[1], CAL_GAIN_I[2]);
+    Serial.printf("const float CAL_GAIN_V[2] = {%.2ff, %.2ff};\n",
+                  CAL_GAIN_V[0], CAL_GAIN_V[1]);
+    for (int c = 0; c < 3; c++) {
+        if (par[c] < 0)
+            Serial.printf("// ATENCAO: corrente %d sem carga — par nao detectado (valor padrao).\n", c + 1);
+    }
+    Serial.println("--------------------------------------------------\n");
 }
 
-// =============================================================
-//  Mede N vezes e retorna a média (para maior estabilidade)
-// =============================================================
-void medirMedia(int repeticoes, float &mediaI, float &mediaV) {
-  float somaI = 0, somaV = 0;
-  for (int i = 0; i < repeticoes; i++) {
-    Serial.print("    Medição ");
-    Serial.print(i + 1);
-    Serial.print("/");
-    Serial.print(repeticoes);
-    Serial.print(" ... ");
-    float ci = readCurrentRms() * CALIBRATION_GAIN_CURRENT;
-    float cv = readVoltageRms() * CALIBRATION_GAIN_VOLTAGE;
-    somaI += ci;
-    somaV += cv;
-    Serial.print("I=");
-    Serial.print(ci, 3);
-    Serial.print(" A  |  V=");
-    Serial.print(cv, 2);
-    Serial.println(" V");
-    delay(200);
-  }
-  mediaI = somaI / repeticoes;
-  mediaV = somaV / repeticoes;
+void processarComando() {
+    if (!Serial.available()) return;
+    String cmd = Serial.readStringUntil('\n');
+    cmd.trim();
+    cmd.toLowerCase();
+    if (cmd.length() == 0) return;
+
+    if (cmd == "p") { imprimirConstantes(); return; }
+
+    int esp = cmd.indexOf(' ');
+    if (esp < 0) {
+        Serial.println("Use: vp <V> | vn <V> | i1 <A> | i2 <A> | i3 <A> | p");
+        return;
+    }
+    String alvo = cmd.substring(0, esp);
+    float real  = cmd.substring(esp + 1).toFloat();
+    if (real <= 0) { Serial.println("Valor invalido."); return; }
+
+    if (alvo == "vp" || alvo == "vn") {
+        int s = (alvo == "vp") ? 0 : 1;
+        if (vrmsBruto[s] < 0.001f) { Serial.println("Sem sinal nesse sensor de tensao."); return; }
+        CAL_GAIN_V[s] = real / vrmsBruto[s];
+        Serial.printf(">> CAL_GAIN_V[%d] (%s) = %.2f\n", s, s == 0 ? "VP" : "VN", CAL_GAIN_V[s]);
+    } else if (alvo == "i1" || alvo == "i2" || alvo == "i3") {
+        int c = alvo.charAt(1) - '1';
+        if (irmsBruto[c] < 0.00005f) { Serial.println("Sem sinal nesse sensor de corrente."); return; }
+        CAL_GAIN_I[c] = real / irmsBruto[c];
+        Serial.printf(">> CAL_GAIN_I[%d] (corrente %d) = %.4f\n", c, c + 1, CAL_GAIN_I[c]);
+    } else {
+        Serial.println("Use: vp <V> | vn <V> | i1 <A> | i2 <A> | i3 <A> | p");
+    }
 }
 
-// =============================================================
-//  SETUP
-// =============================================================
+const char* satura(int mn, int mx) {
+    return (mn < 50 || mx > 4045) ? "SATURA!" : "ok";
+}
+
+// ─────────────────────────────────────────────────────────
 void setup() {
-  Serial.begin(115200);
-  delay(2000);
+    Serial.begin(115200);
+    delay(1000);
+    analogReadResolution(12);
 
-  analogReadResolution(ADC_BITS);
-  analogSetAttenuation(ADC_11db);  // suporta até ~3,1 V no ESP32
+    for (int s = 0; s < 2; s++) dcV[s] = ADC_VREF / 2.0f;
+    for (int c = 0; c < 3; c++) dcI[c] = ADC_VREF / 2.0f;
 
-  // ─────────────────────────────────────────────
-  //  Tela de boas-vindas
-  // ─────────────────────────────────────────────
-  Serial.println();
-  linha('=');
-  Serial.println("   ENERGYSAFE — CALIBRAÇÃO DE SENSORES");
-  Serial.println("   ESP32 + SCT-013-000 + Divisor Resistivo");
-  linha('=');
-  Serial.println();
-  Serial.println("  Antes de começar, certifique-se de que:");
-  Serial.println("  [1] O CT (clamp) está passado pelo fio de fase");
-  Serial.println("  [2] Uma carga CONHECIDA está ligada (ex: chuveiro,");
-  Serial.println("      ferro de solda, lâmpada incandescente)");
-  Serial.println("  [3] Você tem um multímetro para medir a corrente e");
-  Serial.println("      a tensão REAIS no mesmo ponto");
-  Serial.println("  [4] O pino ADC de tensão está ajustado no código");
-  Serial.println("      (ADC_PIN_VOLTAGE = 35 por padrão)");
-  Serial.println();
-  Serial.println("  Digite qualquer tecla e pressione ENTER para iniciar...");
-  while (!Serial.available()) { delay(100); }
-  while (Serial.available()) Serial.read();
+    Serial.println("\n===== EnergySafe — Calibracao =====");
+    Serial.println("Comandos: vp <V> | vn <V> | i1 <A> | i2 <A> | i3 <A> | p");
+    Serial.println("Estabilizando o offset (~10 s)...\n");
 
-  // ─────────────────────────────────────────────
-  //  ETAPA 1 — Leitura bruta sem calibração
-  // ─────────────────────────────────────────────
-  Serial.println();
-  linha();
-  Serial.println("  ETAPA 1 — Leitura bruta do sensor (sem calibração)");
-  linha();
-  Serial.println("  Aguardando estabilização (3 s)...");
-  delay(3000);
-
-  float mediaI_bruta, mediaV_bruta;
-  medirMedia(5, mediaI_bruta, mediaV_bruta);
-
-  Serial.println();
-  Serial.print("  ✔ Média corrente bruta : ");
-  Serial.print(mediaI_bruta, 3);
-  Serial.println(" A");
-  Serial.print("  ✔ Média tensão bruta   : ");
-  Serial.print(mediaV_bruta, 2);
-  Serial.println(" V");
-
-  // ─────────────────────────────────────────────
-  //  ETAPA 2 — Referência do usuário (multímetro)
-  // ─────────────────────────────────────────────
-  Serial.println();
-  linha();
-  Serial.println("  ETAPA 2 — Insira os valores medidos pelo multímetro");
-  linha();
-  Serial.println("  Meça agora com o multímetro e digite os valores:");
-  Serial.println();
-
-  referenceIrms = waitForFloat("Corrente real medida pelo multímetro (A)");
-  referenceVrms = waitForFloat("Tensão real medida pelo multímetro (V)  ");
-
-  // ─────────────────────────────────────────────
-  //  ETAPA 3 — Cálculo dos ganhos
-  // ─────────────────────────────────────────────
-  float gainI = (mediaI_bruta > 0.001f) ? (referenceIrms / mediaI_bruta) : 1.0f;
-  float gainV = (mediaV_bruta > 0.5f)   ? (referenceVrms  / mediaV_bruta)  : 1.0f;
-
-  CALIBRATION_GAIN_CURRENT = gainI;
-  CALIBRATION_GAIN_VOLTAGE = gainV;
-
-  Serial.println();
-  linha();
-  Serial.println("  ETAPA 3 — Ganhos calculados");
-  linha();
-  Serial.print("  CALIBRATION_GAIN (corrente) = ");
-  Serial.println(gainI, 6);
-  Serial.print("  CALIBRATION_GAIN (tensão)   = ");
-  Serial.println(gainV, 6);
-
-  // ─────────────────────────────────────────────
-  //  ETAPA 4 — Verificação com os ganhos aplicados
-  // ─────────────────────────────────────────────
-  Serial.println();
-  linha();
-  Serial.println("  ETAPA 4 — Verificação (leitura com calibração aplicada)");
-  linha();
-  Serial.println("  Mantendo a mesma carga ligada...");
-  delay(2000);
-
-  float mediaI_cal, mediaV_cal;
-  medirMedia(5, mediaI_cal, mediaV_cal);
-
-  float erroI = abs(mediaI_cal - referenceIrms) / referenceIrms * 100.0f;
-  float erroV = abs(mediaV_cal - referenceVrms)  / referenceVrms  * 100.0f;
-
-  Serial.println();
-  Serial.print("  Corrente calibrada : ");
-  Serial.print(mediaI_cal, 3);
-  Serial.print(" A   (referência: ");
-  Serial.print(referenceIrms, 3);
-  Serial.print(" A)   erro: ");
-  Serial.print(erroI, 2);
-  Serial.println(" %");
-
-  Serial.print("  Tensão calibrada   : ");
-  Serial.print(mediaV_cal, 2);
-  Serial.print(" V   (referência: ");
-  Serial.print(referenceVrms, 2);
-  Serial.print(" V)   erro: ");
-  Serial.print(erroV, 2);
-  Serial.println(" %");
-
-  // Potência aparente
-  float pAparente = mediaI_cal * mediaV_cal;
-  Serial.print("  Potência aparente  : ");
-  Serial.print(pAparente, 1);
-  Serial.println(" VA");
-
-  // ─────────────────────────────────────────────
-  //  RESULTADO FINAL — Cole no config.h
-  // ─────────────────────────────────────────────
-  Serial.println();
-  linha('=');
-  Serial.println("  RESULTADO FINAL — Copie para o seu config.h:");
-  linha('=');
-  Serial.println();
-  Serial.println("  // ===== CALIBRAÇÃO GERADA AUTOMATICAMENTE =====");
-  Serial.print("  #define CALIBRATION_GAIN     ");
-  Serial.print(gainI, 6);
-  Serial.println("f   // gain corrente SCT-013");
-  Serial.print("  #define VOLTAGE_GAIN         ");
-  Serial.print(gainV, 6);
-  Serial.println("f   // gain tensão divisor resistivo");
-  Serial.println();
-
-  if (erroI <= 2.0f && erroV <= 2.0f) {
-    Serial.println("  ✔ Calibração OK — erro abaixo de 2% em ambos os canais.");
-  } else {
-    Serial.println("  ⚠ Atenção — um ou mais canais com erro acima de 2%.");
-    Serial.println("    Verifique:");
-    Serial.println("    • Se o VOLTAGE_DIVIDER_FACTOR está correto (R1 e R2 da placa)");
-    Serial.println("    • Se o burden de 33 Ω está bem soldado");
-    Serial.println("    • Se o CT está bem posicionado no fio de fase");
-    Serial.println("    • Se a leitura do multímetro foi em RMS (não pico)");
-    Serial.println("    Execute a calibração novamente após as correções.");
-  }
-
-  linha('=');
-  Serial.println();
-  Serial.println("  Calibração concluída. O ESP32 continua monitorando...");
-  Serial.println("  (Reset para rodar a calibração novamente)");
-  Serial.println();
+    for (int k = 0; k < 4; k++)
+        for (int c = 0; c < 3; c++) medirCanal(c);
 }
 
-// =============================================================
-//  LOOP — Monitoramento contínuo após calibração
-// =============================================================
 void loop() {
-  float i = readCurrentRms() * CALIBRATION_GAIN_CURRENT;
-  float v = readVoltageRms()  * CALIBRATION_GAIN_VOLTAGE;
-  float p = i * v;
+    for (int c = 0; c < 3; c++) {
+        medirCanal(c);
+        processarComando();
+    }
 
-  Serial.print("I=");
-  Serial.print(i, 3);
-  Serial.print(" A  |  V=");
-  Serial.print(v, 2);
-  Serial.print(" V  |  P=");
-  Serial.print(p, 1);
-  Serial.println(" VA");
+    Serial.println("TENSAO");
+    for (int s = 0; s < 2; s++) {
+        Serial.printf("  %s (GPIO%d): %6.1f V   ADC %4d-%4d %s\n",
+                      s == 0 ? "VP" : "VN", PINO_VSENSOR[s],
+                      vrmsBruto[s] * CAL_GAIN_V[s],
+                      adcMinV[s], adcMaxV[s], satura(adcMinV[s], adcMaxV[s]));
+    }
 
-  delay(2000);
+    Serial.println("CORRENTE | Irms    | P c/ VP  FP VP | P c/ VN  FP VN | par  | ADC");
+    for (int c = 0; c < 3; c++) {
+        float gI = CAL_GAIN_I[c];
+        int par  = sugerirPar(c);
+        Serial.printf("  %d      | %6.3f A | %7.1f  %5.2f | %7.1f  %5.2f | %s | %4d-%4d %s\n",
+                      c + 1, irmsBruto[c] * gI,
+                      pBruto[c][0] * CAL_GAIN_V[0] * gI, fpPar(c, 0),
+                      pBruto[c][1] * CAL_GAIN_V[1] * gI, fpPar(c, 1),
+                      par < 0 ? " -- " : (par == 0 ? " VP " : " VN "),
+                      adcMinI[c], adcMaxI[c], satura(adcMinI[c], adcMaxI[c]));
+    }
+    Serial.println();
+    processarComando();
 }
