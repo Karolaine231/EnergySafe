@@ -1,113 +1,165 @@
-# ⚡ EnergySafe — Firmware v3.0
+# ⚡ EnergySafe — Firmware v5.0.6
 
-Firmware para **ESP32** que realiza monitoramento energético trifásico em tempo real. Mede corrente e tensão em 3 fases simultaneamente, envia os dados para a API via HTTPS e armazena localmente no SD card em caso de falha de rede ou energia.
+Firmware para **ESP32** que faz o monitoramento energético trifásico em tempo real. Ele mede corrente e tensão em 3 fases, calcula localmente Vrms, Irms, potência ativa e aparente, fator de potência, frequência e energia acumulada, e envia as medições para a API via HTTPS. Se a rede ou a API falharem, as medições ficam guardadas no cartão SD e são reenviadas automaticamente.
+
+O projeto tem **3 módulos** (ADM0, ADM01 e ADM02). Cada um tem o seu próprio firmware e envia para os seus próprios canais no backend.
 
 ---
 
-## 🛠 Hardware necessário
+## 📁 Estrutura
 
-| Componente | Modelo | Qtd |
+```
+firmware/
+├── EnergySafe_ADM0/
+│   └── EnergySafe_ADM0.ino     # Módulo ADM0  → canais 1, 2, 3
+├── EnergySafe_ADM01/
+│   └── EnergySafe_ADM01.ino    # Módulo ADM01 → canais 4, 5, 6
+├── EnergySafe_ADM02/
+│   └── EnergySafe_ADM02.ino    # Módulo ADM02 → canais 7, 8, 9
+├── teste_sd_placa/
+│   └── teste_sd_placa.ino      # Teste do cartão SD na placa EnergySafe
+└── README.md
+```
+
+Os três firmwares são idênticos, exceto por `DEVICE_NAME` e `CANAL_IDS`.
+
+---
+
+## 🛠 Hardware
+
+Placa própria **Hardware Energy Safe REV 1.0** (EasyEDA).
+
+| Componente | Modelo | Qtd por módulo |
 |---|---|---|
-| Microcontrolador | ESP32 (38 pinos) | 1 |
-| Sensor de corrente | SCT-013-030 (30A) | 3 |
-| Sensor de tensão | ZMPT101B | 3 |
-| Módulo SD Card | SPI | 1 |
-| Cartão microSD | Qualquer | 1 |
+| Microcontrolador | ESP32-WROOM-32E-N8R2 | 1 |
+| Sensor de corrente | SCT-013-000 (100 A : 50 mA) + burden 33 Ω | 3 |
+| Sensor de tensão | ZMPT101B | 2 |
+| Leitor microSD | Slot simples SPI, 3,3 V, sem regulador | 1 |
+| Cartão microSD | Até 32 GB, FAT32 | 1 |
+| Conversor USB-serial | CP2102 (gravação) | 1 |
+| Fonte | Flyback TNY275 + AMS1117 3,3 V | 1 |
 
 ### Pinagem
 
-| Fase | Corrente (ADC) | Tensão (ADC) |
+| Fase | Corrente (ADC1) | Tensão (ADC1) |
 |---|---|---|
-| A | GPIO 34 | GPIO 33 |
-| B | GPIO 35 | GPIO 25 |
-| C | GPIO 32 | GPIO 26 |
+| A | GPIO 34 | GPIO 36 (SENSOR_VP) |
+| B | GPIO 35 | GPIO 39 (SENSOR_VN) |
+| C | GPIO 32 | GPIO 39 (SENSOR_VN, compartilhado com a fase B) |
 
-**SD Card (SPI):**
+**Cartão SD (SPI):**
 
 | Sinal | GPIO |
 |---|---|
+| CS | 17 |
 | MOSI | 23 |
 | MISO | 19 |
-| SCK | 18 |
-| CS | 5 |
+| SCK | **5** |
 
-> ⚠️ GPIOs 34, 35 e 32 são **somente entrada** no ESP32 — ideais para ADC, não conecte saídas neles.
+> ⚠️ O SCK está no **GPIO 5**, e não no GPIO 18 (padrão do ESP32). Por isso o firmware inicializa o SPI com os pinos explícitos: `spiSD.begin(5, 19, 23, 17)`. Sem isso, o cartão não monta.
+
+> ⚠️ Todos os sensores estão em pinos **ADC1**, que continuam funcionando com o Wi-Fi ligado (o ADC2 não funciona com Wi-Fi ativo). Os GPIOs 34, 35, 36 e 39 são **somente entrada**.
+
+> ⚠️ Na versão **N8R2** (com PSRAM), o **GPIO 16** fica ligado à PSRAM interna. Ele precisa de pull-up de 10 kΩ e não pode ser usado para outra função (datasheet ESP32-WROOM-32E, seção 9).
 
 ---
 
 ## 📦 Dependências
 
-Instale via **Arduino Library Manager** ou **PlatformIO**:
+O firmware **não usa bibliotecas externas**. Desde a v5.0.6, o JSON é montado com `snprintf`, sem o ArduinoJson.
 
 | Biblioteca | Uso |
 |---|---|
-| [EmonLib](https://github.com/openenergymonitor/EmonLib) | Cálculo de Irms, Vrms e potência |
-| [ArduinoJson](https://arduinojson.org/) ≥ 6.x | Serialização do payload JSON |
-| WiFi *(built-in ESP32)* | Conexão Wi-Fi |
+| WiFi *(built-in)* | Conexão Wi-Fi |
 | WiFiClientSecure *(built-in)* | HTTPS/TLS |
-| HTTPClient *(built-in)* | Requisições HTTP POST |
-| SD *(built-in)* | Leitura/escrita no SD card |
+| HTTPClient *(built-in)* | POST para a API |
+| SD / SPI *(built-in)* | Buffer offline no cartão |
+| esp_task_wdt *(built-in)* | Watchdog |
 
-**Board:** `esp32` — instale via Boards Manager: `https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json`
+**Placa:** instale o pacote `esp32` pelo Boards Manager:
+`https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json`
+
+**Configuração na Arduino IDE:** placa `ESP32 Dev Module`, Monitor Serial em `115200`. O código funciona com os cores 2.x e 3.x.
+
+> Os avisos `A categoria '...' na biblioteca ... é invalida` e `Invalid version found` que aparecem na compilação são da própria IDE e podem ser ignorados.
 
 ---
 
 ## ⚙️ Configuração
 
-Edite **somente o bloco de configurações** no topo do `.ino`:
+Edite **somente o bloco CONFIGURAÇÕES** no topo do `.ino` de cada módulo.
 
 ```cpp
 // Wi-Fi
 const char* WIFI_SSID     = "NomeDaRede";
 const char* WIFI_PASSWORD = "SuaSenha";
 
-// Endpoint da API
-const char* API_URL = "https://seu-backend.com/medicoes/";
+// API
+const char* API_URL = "https://backendsafe.onrender.com/medicoes/";
 
-// IDs dos canais cadastrados no backend
-const int CANAL_A = 1;
-const int CANAL_B = 2;
-const int CANAL_C = 3;
+// Identificação do módulo
+const char* DEVICE_NAME = "ADM0";          // também vira o hostname na rede
 
-// Calibração
-const double CAL_CORRENTE = 111.1;   // SCT-013-030 → 111.1
-const double CAL_TENSAO   = 234.26;  // ZMPT101B — ajuste pelo multímetro
-const double DEFASAGEM    = 1.7;     // phase_shift EmonLib
+// IDs dos canais no backend (Fase A, B, C)
+const int CANAL_IDS[3] = {1, 2, 3};
 ```
 
-### Intervalos configuráveis
+| Módulo | `DEVICE_NAME` | `CANAL_IDS` |
+|---|---|---|
+| ADM0 | `"ADM0"` | `{1, 2, 3}` |
+| ADM01 | `"ADM01"` | `{4, 5, 6}` |
+| ADM02 | `"ADM02"` | `{7, 8, 9}` |
+
+> Os IDs precisam existir no backend (`GET /canais/` em `/docs`). Confira antes de gravar.
+
+> 🔒 **Não suba senhas reais para o GitHub.** Antes do commit, troque `WIFI_SSID` e `WIFI_PASSWORD` por valores genéricos.
+
+> 🌐 A rede da instituição libera o acesso **por endereço MAC**. O firmware mostra o MAC logo no boot (`MAC do ESP32: ...`). Se a placa ou o ESP forem trocados, o novo MAC precisa ser liberado.
+
+### Intervalos
 
 ```cpp
-#define COLLECT_INTERVAL_MS  60000UL  // leitura a cada 60s
-#define RETRY_INTERVAL_MS   120000UL  // reenvio SD a cada 2min
-#define WIFI_CHECK_MS        15000UL  // verificação Wi-Fi a cada 15s
-#define MAX_PENDING_LINES     3000    // limite do buffer no SD (~3 canais × 1000 leituras)
+#define PUBLISH_INTERVAL_MS   600000UL  // envio a cada 10 min (use 5000UL para teste)
+#define RETRY_INTERVAL_MS     120000UL  // reenvio do SD a cada 2 min
+#define WIFI_CHECK_MS          15000UL  // verificação do Wi-Fi a cada 15 s
+#define WDT_TIMEOUT_S              30   // watchdog
+#define MAX_PENDING_LINES        3000   // limite do buffer no SD
 ```
 
 ---
 
-## 🔄 Fluxo de operação
+## 🏗️ Arquitetura
 
 ```
-┌──────────────────┐
-│   Lê 3 fases     │  calcVI(1480, 2000) — Irms + Vrms + P
-└────────┬─────────┘
-         │
-┌────────▼─────────┐     ┌──────────────────────┐
-│  Wi-Fi ok?       │ Não │  Salva no SD         │
-│  Envia HTTP POST │────▶│  (pending.csv)       │
-└────────┬─────────┘     └──────────────────────┘
-         │ Sim
-┌────────▼─────────┐
-│  API respondeu?  │ Não → Salva no SD também
-└────────┬─────────┘
-         │ Sim
-┌────────▼─────────┐
-│  Reenvio SD      │  a cada RETRY_INTERVAL_MS
-└──────────────────┘
+┌────────────────────────────────────────────┐
+│  FreeRTOS Task: acquisitionTask() (Core 1) │
+│  • Amostra V e I a 2 kHz (10 ciclos)       │
+│  • Remove offset DC (EMA)                  │
+│  • Filtro passa-baixa                      │
+│  • Calcula Vrms, Irms, P, S, FP, Freq      │
+│  • Acumula energia (kWh)                   │
+│  • Protege resultados com mutex            │
+└────────────────────────────────────────────┘
+        ↓ a cada PUBLISH_INTERVAL_MS
+┌────────────────────────────────────────────┐
+│  loop()                                    │
+│  → Copia snapshot protegido                │
+│  → Sanity check (limites físicos)          │
+│  → Wi-Fi ok?  → HTTPS POST ao backend      │
+│  → Falhou?    → Salva no SD (pending.csv)  │
+│  → Reenvio periódico do SD                 │
+│  → Alimenta o watchdog                     │
+└────────────────────────────────────────────┘
 ```
 
-O loop é **não-bloqueante** — usa `millis()` para todos os intervalos, sem nenhum `delay()` no caminho principal.
+### Proteções
+
+- **Watchdog (30 s):** reinicia o ESP se ele travar. O watchdog é alimentado entre os envios de cada canal.
+- **Sanity check:** marca como `valido=false` as medições fora dos limites físicos (V 0–300 V, I 0–120 A, P ≤ 36 kW, F 45–70 Hz, FP −1 a 1) e corrige NaN e Inf.
+- **Reconexão Wi-Fi com backoff exponencial:** 5 s → 60 s.
+- **SD com política FIFO:** quando chega em `MAX_PENDING_LINES`, descarta a linha mais antiga.
+- **Reenvio seguro:** usa o arquivo temporário `/pend_tmp.csv` e, se o Wi-Fi cair no meio do reenvio, preserva as linhas que faltam.
+- **Validação do CSV:** linhas corrompidas ou com número errado de campos são descartadas.
 
 ---
 
@@ -118,113 +170,135 @@ O loop é **não-bloqueante** — usa `millis()` para todos os intervalos, sem n
 ```json
 {
   "canal_id": 1,
-  "corrente": 4.8321,
+  "corrente": 4.832,
   "tensao": 220.50,
-  "potencia": 1065.08,
+  "potencia": 1065.1,
   "valido": true,
-  "timestamp": "2026-05-21T14:32:00Z"
+  "timestamp": "2026-09-29T17:32:00Z"
 }
 ```
 
-- `valido = false` quando `corrente == 0` (circuito desligado)
-- `corrente` zerada se `Irms < 0.1 A` (filtro de ruído)
-- `tensao` zerada se `Vrms < 5.0 V` (filtro de ruído)
-- Timestamp em **ISO 8601 UTC** via NTP (fuso GMT-3, Brasília)
+- `valido = false` quando `Vrms ≤ 5 V` ou `Irms ≤ 0,02 A`, ou quando o sanity check falha.
+- O `timestamp` está em **UTC** (ISO 8601 com `Z`). O backend converte para o horário de Brasília.
 
 ---
 
-## 💾 Buffer offline (SD card)
+## 💾 Buffer offline (SD)
 
-Quando não há conexão ou a API rejeita a medição, os dados são persistidos em `/pending.csv`:
+Quando não há conexão ou a API rejeita a medição, a linha vai para `/pending.csv` (sem cabeçalho, 10 campos):
 
 ```
-canal_id,corrente,tensao,potencia,valido,timestamp
-1,4.8321,220.50,1064.8820,1,2026-05-21T14:32:00Z
-2,3.1200,219.80,685.7760,1,2026-05-21T14:32:00Z
-3,0.0000,0.00,0.0000,0,2026-05-21T14:32:00Z
+canal_id,timestamp,tensao,corrente,potencia_ativa,potencia_aparente,fator_potencia,frequencia,energia_kwh,valido
+1,2026-09-29T17:32:00Z,220.50,4.8321,1065.08,1065.48,0.9996,60.00,0.012345,1
 ```
 
-**Comportamentos de segurança:**
-- Quando o buffer atinge `MAX_PENDING_LINES`, a linha mais antiga é descartada automaticamente (política **FIFO**)
-- O reenvio usa um arquivo temporário (`/pend_tmp.csv`) para evitar corrupção em caso de queda de energia durante a escrita
-- Se o Wi-Fi cair **durante** o reenvio, o processo é abortado e as linhas restantes são preservadas
+O reenvio acontece a cada `RETRY_INTERVAL_MS`, sempre que o Wi-Fi estiver conectado.
 
 ---
 
-## 🕐 NTP e Timestamps
+## 🕐 NTP
 
-O firmware sincroniza com `pool.ntp.org` e `time.google.com` ao iniciar (fuso **GMT-3**).
+Sincroniza com `pool.ntp.org` e `time.google.com` em **UTC**. Faz isso no boot e a cada reconexão do Wi-Fi.
 
-Em caso de falha de NTP, o timestamp cai para um valor relativo ao boot:
-
-```
-1970-01-01T00:01:03Z  ← segundos desde o boot
-```
-
-Esses registros são válidos para o SD, mas o backend pode rejeitá-los dependendo da validação de data.
+Se o NTP falhar, o timestamp passa a ser relativo ao boot (`1970-01-01T00:01:03Z`). Em redes corporativas, confirme que a **porta UDP 123 (NTP)** e a **porta 443 (HTTPS)** estão liberadas.
 
 ---
 
 ## 📊 Saída Serial (115200 baud)
 
 ```
+MAC do ESP32: XX:XX:XX:XX:XX:XX
 ==================================================
-  ENERGYSAFE — FIRMWARE TOLERANTE A FALHAS v3.0
+  ENERGYSAFE — FIRMWARE v5.0.6
+  Modulo: ADM0 | Canais: 1, 2, 3
+  Segurança reforçada
 ==================================================
-[SENSOR] Fase A: Corrente GPIO34 | Tensao GPIO33
-[SENSOR] Fase B: Corrente GPIO35 | Tensao GPIO25
-[SENSOR] Fase C: Corrente GPIO32 | Tensao GPIO26
-[SD]     Capacidade: 32MB
-[WIFI]   Conectado! IP: 192.168.1.100 | RSSI: -52 dBm
-[NTP]    Horario sincronizado: 2026-05-21T14:32:00Z
+[WDT] Watchdog configurado: timeout=30s
+[SD] Inicializando...
+[SD] Pinos: CS=17 MOSI=23 MISO=19 SCK=5
+[SD] Montado a 20000 kHz
+[SD] OK. Capacidade: 15001MB
+[SD] Nenhuma pendencia encontrada.
+[WIFI] Iniciando conexao...
+===== INFORMAÇÕES DA REDE =====
+IP: 10.0.0.42
+RSSI (Sinal): -58 dBm
+Hostname: ADM0
+[NTP] Sincronizado: 2026-09-29T17:32:00Z
+[SISTEMA] Pronto. Task de aquisicao iniciada.
 ==================================================
-[CICLO #1] Uptime: 60s
-[SENSOR] Fase A -> I: 4.832A | V: 220.5V | P: 1065.66W
-[SENSOR] Fase B -> I: 3.120A | V: 219.8V | P: 685.78W
-[SENSOR] Fase C -> I: 0.000A | V:   0.0V | P:    0.00W
-[SENSOR] Total  -> P: 1751.44W
-[NTP]    Timestamp: 2026-05-21T14:32:00Z
-[API]    Canal 1 — Enviado com sucesso!
-[API]    Canal 2 — Enviado com sucesso!
-[API]    Canal 3 — Enviado com sucesso!
-[STATS]  Ciclos: 1 | OK: 3 | Falhas: 0 | No SD: 0
+[PUBLICACAO #1] Uptime: 600s
+[CANAL 1] V=220.5V I=4.832A P=1065.1W S=1065.5VA FP=1.000 F=60.0Hz E=0.0123kWh valido=sim
+[API] Canal 1 — Enviado com sucesso!
+...
+[STATS] Ciclos: 1 | OK: 3 | Falhas: 0 | No SD: 0
 ```
 
 ---
 
-## 🧪 Calibração dos sensores
+## 🧪 Calibração
 
-### Corrente — SCT-013-030
+A calibração é **por sensor**. Cada fase tem o seu próprio ganho.
 
-O valor padrão `111.1` é o fator de calibração para o modelo 30A/1V. Para ajustar:
+### Corrente — SCT-013-000
 
-1. Coloque uma carga conhecida no circuito (ex: resistência medida)
-2. Leia o valor de `Irms` no Serial
-3. Ajuste `CAL_CORRENTE` pela proporção: `CAL_nova = CAL_atual × (I_real / I_lido)`
+```cpp
+const float CT_RATIO      = 2000.0f;               // 100 A : 50 mA
+const float BURDEN_OHMS   = 33.0f;                 // resistor de carga na placa
+const float CAL_GAIN_I[3] = {1.0f, 1.0f, 1.0f};    // Fase A, B, C
+```
+
+1. Ligue uma carga conhecida e meça a corrente com um alicate amperímetro.
+2. Leia o `I=` da fase no Serial.
+3. Ajuste: `CAL_GAIN_I_novo = CAL_GAIN_I_atual × (I_real / I_lido)`.
 
 ### Tensão — ZMPT101B
 
-1. Meça a tensão da rede com um multímetro calibrado
-2. Compare com o `Vrms` lido no Serial
-3. Ajuste `CAL_TENSAO` pela mesma proporção
+```cpp
+const float CAL_GAIN_V[2] = {234.26f, 234.26f};    // sensor VP, sensor VN
+```
 
-### Defasagem (phase shift)
+1. Meça a tensão da rede com um multímetro.
+2. Compare com o `V=` no Serial.
+3. Ajuste pela mesma proporção. Ajuste também o trimpot do ZMPT101B para a senoide não saturar.
 
-O parâmetro `DEFASAGEM = 1.7` afeta o cálculo do fator de potência. Para cargas puramente resistivas (aquecedores, lâmpadas incandescentes) o impacto é mínimo. Para cargas indutivas (motores, ar-condicionado), ajuste até o fator de potência exibido bater com o medidor de referência.
+---
+
+## 🔧 Solução de problemas
+
+| Sintoma | Causa provável | Solução |
+|---|---|---|
+| `[SD] FALHA!` | SPI com pinos errados, cartão em formato errado, GND do leitor solto | Rode `teste_sd_placa.ino`. Use cartão até 32 GB em FAT32 e confira o GND do U7 |
+| Não conecta no Wi-Fi | MAC não liberado, SSID ou senha errados | Confira o MAC no Serial com a lista liberada |
+| `Erro de conexao: -1` na API | HTTPS bloqueado ou backend em cold start (Render) | Libere a porta 443. As medições ficam no SD e são reenviadas |
+| Timestamp `1970-...` | NTP bloqueado | Libere a porta UDP 123 |
+| `ArduinoJson.h: No such file` | Versão antiga do firmware | Use a v5.0.6, que não depende do ArduinoJson |
 
 ---
 
 ## 🔒 Segurança HTTPS
 
-A conexão usa `WiFiClientSecure` com `setInsecure()`, aceitando qualquer certificado TLS. Isso é suficiente para proteger os dados em trânsito, mas não autentica o servidor. Para ambientes de produção críticos, considere **certificate pinning** com o certificado do backend.
+A conexão usa `WiFiClientSecure` com `setInsecure()`: os dados vão criptografados, mas o certificado do servidor não é verificado. Para produção, configure `client.setCACert()` com o certificado raiz do backend.
+
+---
+
+## 📝 Histórico
+
+| Versão | Mudanças |
+|---|---|
+| **v5.0.6** | Pinos do SD corrigidos para a placa (CS 17, SCK 5), com montagem em 20, 10 ou 4 MHz. Timestamp em UTC real. ArduinoJson removido. Watchdog alimentado entre canais. Um firmware por módulo (ADM0, ADM01, ADM02) com hostname |
+| v5.0.5 | Bluetooth removido |
+| v5.0.4 | Calibração por fase |
+| v5.0.3 | Tensão nos pinos VP/VN (ADC1) |
+| v5.0 | FreeRTOS, watchdog, sanity check, backoff do Wi-Fi, validação do CSV |
+| v3.0 | Versão inicial com EmonLib |
 
 ---
 
 ## 🔗 Relacionado
 
-- [Backend API — EnergySafe](../backend/) — recebe as medições e gera alertas
-- [Banco de dados (schema SQL)](../database/) — schema PostgreSQL completo
-- [Frontend](https://energy-safe.vercel.app) — dashboard de monitoramento
+- [Backend API — EnergySafe](https://github.com/Julyxdias/BackendSafe): recebe as medições e gera alertas ([docs](https://backendsafe.onrender.com/docs))
+- [Frontend](https://energy-safe.vercel.app): dashboard de monitoramento
 
 ---
 
