@@ -63,9 +63,8 @@ ARQUITETURA:
 PINOS:
 - 3 canais de corrente:  GPIO34, GPIO35, GPIO32
 - Tensão (2 sensores, ESP32-E):
-    Fase A → SENSOR_VP (GPIO36)
-    Fase B → SENSOR_VN (GPIO39)
-    Fase C → SENSOR_VN (GPIO39, compartilhado com Fase B)
+    ZMPT no VP (GPIO36) e ZMPT no VN (GPIO39) — um de 220 V e
+    um de 110 V; o par corrente↔tensão é definido em CANAL_VSENSOR_IDX
 - SD Card SPI:           CS=17, MOSI=23, MISO=19, SCK=5   [v5.0.6]
 ============================================================
 */
@@ -122,39 +121,23 @@ const int CANAL_IDS[3] = {1, 2, 3};
 const int NUM_CANAIS    = 3;
 
 // ─── Pinos dos sensores ────────────────────────────────────
-const int PINO_CORRENTE[3] = {34, 35, 32};
+const int PINO_CORRENTE[3] = {34, 35, 32};   // sensor de corrente 1, 2, 3
+const int PINO_VSENSOR[2]  = {36, 39};       // ZMPT no VP (U5), ZMPT no VN (U6)
 
-// [v5.0.3] ESP32-E: apenas 2 sensores de tensão físicos disponíveis
-// (SENSOR_VP = GPIO36, SENSOR_VN = GPIO39). Fase A usa VP; Fases B e C
-// compartilham o mesmo sensor em VN (mesma leitura de tensão para ambas).
-// Ambos são pinos ADC1 (não conflitam com Wi-Fi, que usa ADC2) —
-// isso também resolve o conflito latente que existia com GPIO25/26 (ADC2).
-#define SENSOR_VP  36
-#define SENSOR_VN  39
-const int PINO_TENSAO[3]   = {SENSOR_VP, SENSOR_VN, SENSOR_VN};
+// ─── Qual sensor de tensão cada canal de corrente usa ──────
+// DEFINA NA INSTALAÇÃO: para cada sensor de corrente, qual ZMPT
+// mede a tensão do MESMO circuito. Rode o EnergySafe_calibracao.ino
+// com uma carga resistiva ligada: ele mostra qual combinação dá FP ≈ 1.
+//   0 = ZMPT no VP (GPIO36)    1 = ZMPT no VN (GPIO39)
+const int CANAL_VSENSOR_IDX[3] = {0, 1, 1};  // corrente 1, 2, 3
 
-// ─── [v5.0.4] Calibração do SCT-013-000 (100A:50mA) ────────
-// CT_RATIO e BURDEN_OHMS descrevem o modelo físico do sensor (iguais
-// para os 3, pois é o mesmo modelo de CT). CAL_GAIN_I é o ganho de
-// ajuste fino POR FASE — calibre cada sensor separadamente comparando
-// o Irms lido no Serial com uma pinça amperímetro de referência.
-//   CAL_GAIN_I[0] → Fase A (GPIO34)
-//   CAL_GAIN_I[1] → Fase B (GPIO35)
-//   CAL_GAIN_I[2] → Fase C (GPIO32)
+// ─── Calibração (valores do EnergySafe_calibracao.ino) ─────
+// Sensores de corrente próprios: CT_RATIO e BURDEN_OHMS são só a
+// escala base; o ajuste real fica em CAL_GAIN_I (pode ficar longe de 1).
 const float CT_RATIO      = 2000.0f;
 const float BURDEN_OHMS   = 33.0f;
-const float CAL_GAIN_I[3] = {1.0f, 1.0f, 1.0f};
-
-// ─── [v5.0.4] Calibração do ZMPT101B (2 sensores físicos) ──
-// Um ganho por sensor de tensão — calibre cada um separadamente
-// comparando o Vrms lido no Serial com um multímetro de referência.
-//   CAL_GAIN_V[0] → sensor em SENSOR_VP (usado pela Fase A)
-//   CAL_GAIN_V[1] → sensor em SENSOR_VN (usado pelas Fases B e C)
-const float CAL_GAIN_V[2] = {234.26f, 234.26f};
-
-// [v5.0.4] Mapeia cada canal (fase) para o índice do sensor de tensão
-// que ele usa em CAL_GAIN_V — mesma lógica de compartilhamento de PINO_TENSAO.
-const int CANAL_VSENSOR_IDX[3] = {0, 1, 1}; // Fase A→VP(0), Fase B→VN(1), Fase C→VN(1)
+const float CAL_GAIN_I[3] = {1.0f, 1.0f, 1.0f};      // corrente 1, 2, 3
+const float CAL_GAIN_V[2] = {234.26f, 234.26f};      // ZMPT VP, ZMPT VN
 
 // ─── ADC ───────────────────────────────────────────────────
 #define ADC_BITS         12
@@ -551,8 +534,11 @@ void acquisitionTask(void* param) {
 
     float dcV[NUM_CANAIS], dcI[NUM_CANAIS];
     for (int c = 0; c < NUM_CANAIS; c++) {
-        dcV[c] = ADC_MID;
-        dcI[c] = ADC_MID;
+        // [v5.0.6] Offset inicial em volts (o sinal é convertido para V).
+        // Antes era ADC_MID (2047,5), e o filtro levava vários segundos
+        // para convergir, gerando leituras erradas nas primeiras publicações.
+        dcV[c] = ADC_VREF / 2.0f;
+        dcI[c] = ADC_VREF / 2.0f;
     }
 
     unsigned long tJanelaInicio = micros();
@@ -562,7 +548,7 @@ void acquisitionTask(void* param) {
             for (int n = 0; n < WINDOW_SAMPLES; n++) {
                 unsigned long t0 = micros();
 
-                int rawV = analogRead(PINO_TENSAO[canal]);
+                int rawV = analogRead(PINO_VSENSOR[CANAL_VSENSOR_IDX[canal]]);
                 int rawI = analogRead(PINO_CORRENTE[canal]);
 
                 float adcV = (float)rawV * (ADC_VREF / ADC_FULL_SCALE);
