@@ -149,9 +149,56 @@ Cole essas linhas no bloco CONFIGURAÇÕES do firmware **daquele módulo** (ADM0
 
 ---
 
-## 📡 Envio para a API
+## 🧠 Como o código funciona
 
-`POST /medicoes/`
+### Arquitetura
+
+```
+┌────────────────────────────────────────────┐
+│  FreeRTOS Task: acquisitionTask() (Core 1) │
+│  • Amostra V e I a 2 kHz (10 ciclos)       │
+│  • Remove offset DC (EMA)                  │
+│  • Filtro passa-baixa                      │
+│  • Calcula Vrms, Irms, P, S, FP, Freq      │
+│  • Acumula energia (kWh)                   │
+│  • Protege resultados com mutex            │
+└────────────────────────────────────────────┘
+        ↓ a cada PUBLISH_INTERVAL_MS
+┌────────────────────────────────────────────┐
+│  loop()                                    │
+│  → Copia snapshot protegido                │
+│  → Sanity check (limites físicos)          │
+│  → Wi-Fi ok?  → HTTPS POST ao backend      │
+│  → Falhou?    → Salva no SD (pending.csv)  │
+│  → Reenvio periódico do SD                 │
+│  → Alimenta o watchdog                     │
+└────────────────────────────────────────────┘
+```
+
+A medição roda numa task separada no Core 1. Assim, o envio pela rede nunca atrasa a amostragem.
+
+### Proteções
+
+- **Watchdog (30 s):** reinicia o ESP se ele travar. O watchdog é alimentado entre os envios de cada canal.
+- **Sanity check:** marca como `valido=false` as medições fora dos limites físicos (V 0–300 V, I 0–120 A, P ≤ 36 kW, F 45–70 Hz, FP −1 a 1) e corrige NaN e Inf.
+- **Reconexão Wi-Fi com backoff exponencial:** 5 s → 60 s. Evita que o ESP fique tentando reconectar sem parar.
+- **SD com política FIFO:** quando chega em 3000 linhas, descarta a linha mais antiga.
+- **Reenvio seguro:** usa o arquivo temporário `/pend_tmp.csv`. Se o Wi-Fi cair no meio do reenvio, as linhas que faltam são preservadas.
+- **Validação do CSV:** linhas corrompidas ou com número errado de campos são descartadas.
+
+### Intervalos
+
+```cpp
+#define PUBLISH_INTERVAL_MS   600000UL  // envio a cada 10 min (5000UL para teste)
+#define RETRY_INTERVAL_MS     120000UL  // reenvio do SD a cada 2 min
+#define WIFI_CHECK_MS          15000UL  // verificação do Wi-Fi a cada 15 s
+#define WDT_TIMEOUT_S              30   // watchdog
+#define MAX_PENDING_LINES        3000   // limite do buffer no SD
+```
+
+### Envio para a API
+
+`POST /medicoes/` com `Content-Type: application/json`:
 
 ```json
 {
@@ -164,7 +211,71 @@ Cole essas linhas no bloco CONFIGURAÇÕES do firmware **daquele módulo** (ADM0
 }
 ```
 
-O horário vem do NTP, em UTC. Quando o envio falha, a medição vai para `/pending.csv` no SD e é reenviada a cada 2 minutos.
+- `valido = false` quando `Vrms ≤ 5 V` ou `Irms ≤ 0,02 A` (circuito desligado), ou quando o sanity check falha.
+- O JSON é montado com `snprintf`, sem biblioteca externa.
+
+### Buffer offline (SD)
+
+Quando não há conexão ou a API rejeita a medição, a linha vai para `/pending.csv` (sem cabeçalho, 10 campos):
+
+```
+canal_id,timestamp,tensao,corrente,potencia_ativa,potencia_aparente,fator_potencia,frequencia,energia_kwh,valido
+1,2026-09-29T17:32:00Z,220.50,4.8321,1065.08,1065.48,0.9996,60.00,0.012345,1
+```
+
+O reenvio acontece a cada 2 minutos, sempre que o Wi-Fi estiver conectado.
+
+### NTP
+
+O firmware sincroniza o horário com `pool.ntp.org` e `time.google.com` em **UTC**, no boot e a cada reconexão do Wi-Fi. Se o NTP falhar, o timestamp passa a ser relativo ao boot (`1970-01-01T00:01:03Z`). Na rede da instituição, as portas **UDP 123 (NTP)** e **443 (HTTPS)** precisam estar liberadas.
+
+### Saída Serial (115200 baud)
+
+```
+MAC do ESP32: XX:XX:XX:XX:XX:XX
+==================================================
+  ENERGYSAFE — FIRMWARE v5.0.6
+  Modulo: ADM0 | Canais: 1, 2, 3
+==================================================
+[WDT] Watchdog configurado: timeout=30s
+[SD] Pinos: CS=17 MOSI=23 MISO=19 SCK=5
+[SD] Montado a 20000 kHz
+[SD] OK. Capacidade: 15001MB
+[WIFI] Iniciando conexao...
+Hostname: ADM0
+[NTP] Sincronizado: 2026-09-29T17:32:00Z
+[SISTEMA] Pronto. Task de aquisicao iniciada.
+==================================================
+[PUBLICACAO #1] Uptime: 600s
+[CANAL 1] V=220.5V I=4.832A P=1065.1W S=1065.5VA FP=1.000 F=60.0Hz E=0.0123kWh valido=sim
+[API] Canal 1 — Enviado com sucesso!
+...
+[STATS] Ciclos: 1 | OK: 3 | Falhas: 0 | No SD: 0
+```
+
+---
+
+## 🔧 Solução de problemas
+
+| Sintoma | Causa provável | Solução |
+|---|---|---|
+| `[SD] FALHA!` | Cartão em formato errado ou GND do leitor solto | Use cartão até 32 GB em FAT32 e confira o GND do leitor |
+| Não conecta no Wi-Fi | MAC não liberado, SSID ou senha errados | Confira o MAC no Serial com a lista liberada |
+| `Erro de conexao: -1` na API | HTTPS bloqueado ou backend acordando (Render) | Libere a porta 443. As medições ficam no SD e são reenviadas |
+| Timestamp `1970-...` | NTP bloqueado | Libere a porta UDP 123 |
+
+---
+
+## 📝 Histórico
+
+| Versão | Mudanças |
+|---|---|
+| **v5.0.6** | Pinos do SD corrigidos (CS 17, SCK 5). Timestamp em UTC. ArduinoJson removido. Um firmware por módulo. Par tensão↔corrente configurável e código de calibração |
+| v5.0.5 | Bluetooth removido |
+| v5.0.4 | Calibração por fase |
+| v5.0.3 | Tensão nos pinos VP/VN (ADC1) |
+| v5.0 | FreeRTOS, watchdog, sanity check, backoff do Wi-Fi, validação do CSV |
+| v3.0 | Versão inicial com EmonLib |
 
 ---
 
