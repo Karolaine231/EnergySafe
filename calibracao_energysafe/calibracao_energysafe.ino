@@ -2,9 +2,9 @@
 ============================================================
 EnergySafe — Calibração dos sensores
 ============================================================
-Usa o mesmo processamento do firmware v5.0.6 (2 kHz, janela
+Usa o mesmo processamento do firmware v5.1.0 (2 kHz, janela
 de 10 ciclos, remoção de DC por EMA, filtro passa-baixa,
-CT_RATIO e BURDEN). Os ganhos daqui valem direto no firmware.
+CT_RATIO e BURDEN). Os ganhos daqui valem direto no config.h.
 
 Também descobre QUAL sensor de tensão (VP ou VN) está no mesmo
 circuito de cada sensor de corrente: com carga resistiva, o par
@@ -33,7 +33,10 @@ const int PINO_VSENSOR[2]  = {36, 39};    // VP, VN
 const float CT_RATIO    = 2000.0f;
 const float BURDEN_OHMS = 33.0f;
 
-// Ganhos iniciais — coloque aqui os valores atuais do firmware
+// Ganhos iniciais — copie aqui os valores ATUAIS do config.h deste módulo.
+// O comando "p" imprime os 3 ganhos de corrente: os que você não recalibrar
+// (i1/i2/i3) saem com o valor daqui. Se ficarem 1.0, ao colar no config.h
+// você apagaria a calibração antiga desses sensores.
 float CAL_GAIN_I[3] = {1.0f, 1.0f, 1.0f};
 float CAL_GAIN_V[2] = {234.26f, 234.26f};
 
@@ -41,7 +44,7 @@ float CAL_GAIN_V[2] = {234.26f, 234.26f};
 #define ADC_FULL_SCALE   4095.0f
 #define SAMPLE_RATE_HZ   2000
 #define SAMPLE_PERIOD_US (1000000 / SAMPLE_RATE_HZ)
-#define WINDOW_SAMPLES   (SAMPLE_RATE_HZ / 60 * 10)
+#define WINDOW_SAMPLES   (SAMPLE_RATE_HZ * 10 / 60)   // 333, igual ao firmware
 #define DC_ALPHA         0.001f
 #define JANELAS_MEDIA    4          // média de 4 janelas por leitura
 #define I_MIN_PAREAMENTO 0.2f       // corrente mínima para sugerir o par
