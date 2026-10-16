@@ -20,7 +20,8 @@ COMO USAR (Monitor Serial 115200, "Nova linha" ativado):
         i2 4.83    -> sensor 2 (GPIO35)
         i3 4.83    -> sensor 3 (GPIO32)
   3. Digite  p  para imprimir as linhas prontas para colar no
-     bloco CONFIGURAÇÕES do firmware (ganhos + CANAL_VSENSOR_IDX).
+     config.h do firmware, no bloco do módulo calibrado
+     (MODULO 0/1/2) — ganhos + CANAL_VSENSOR_IDX.
 ============================================================
 */
 
@@ -123,7 +124,7 @@ void imprimirConstantes() {
     int par[3];
     for (int c = 0; c < 3; c++) par[c] = sugerirPar(c);
 
-    Serial.println("\n----- COLE NO FIRMWARE (bloco CONFIGURACOES) -----");
+    Serial.println("\n----- COLE NO config.h (bloco do modulo calibrado) -----");
     Serial.printf("const int CANAL_VSENSOR_IDX[3] = {%d, %d, %d};  // corrente 1, 2, 3\n",
                   par[0] < 0 ? 0 : par[0], par[1] < 0 ? 1 : par[1], par[2] < 0 ? 1 : par[2]);
     Serial.printf("const float CAL_GAIN_I[3] = {%.4ff, %.4ff, %.4ff};\n",

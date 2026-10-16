@@ -1,16 +1,28 @@
-# ⚡ EnergySafe — Firmware v5.0.6
+# ⚡ EnergySafe — Firmware v5.1.0
 
 Firmware para **ESP32** que monitora o consumo de energia em até 3 circuitos. Ele mede corrente e tensão, envia as medições para a API via HTTPS e guarda os dados no cartão SD quando a rede falha, para reenviar depois.
 
-São 3 módulos, cada um com o seu firmware:
+São 3 módulos que usam **o mesmo firmware**. O módulo é escolhido no `config.h`:
 
-| Módulo | Arquivo | Canais no backend |
+| `MODULO` | Módulo | Canais no backend |
 |---|---|---|
-| ADM0 | `EnergySafe_ADM0.ino` | 1, 2, 3 |
-| ADM01 | `EnergySafe_ADM01.ino` | 4, 5, 6 |
-| ADM02 | `EnergySafe_ADM02.ino` | 7, 8, 9 |
+| 0 | ADM0 | 1, 2, 3 |
+| 1 | ADM01 | 4, 5, 6 |
+| 2 | ADM02 | 7, 8, 9 |
 
-Também há um código separado para calibrar os sensores: `EnergySafe_calibracao.ino`.
+### Arquivos
+
+```
+EnergySafe/
+  EnergySafe.ino          ← firmware (não precisa editar)
+  config.h                ← módulo, Wi-Fi, API, calibração, intervalo
+calibracao_energysafe/
+  calibracao_energysafe.ino   ← calibração dos sensores
+EnergySafe_TesteAPI/
+  EnergySafe_TesteAPI.ino     ← teste de envio para a API (sem sensores)
+```
+
+> Cada sketch fica na sua própria pasta, com o mesmo nome do `.ino`. A Arduino IDE exige isso: quando vários `.ino` ficam na mesma pasta, ela junta todos num programa só e dá erro de `setup()`/`loop()` duplicado.
 
 ---
 
@@ -49,23 +61,32 @@ Também há um código separado para calibrar os sensores: `EnergySafe_calibraca
 
 Na Arduino IDE, use a placa **ESP32 Dev Module** e o Monitor Serial em **115200**. O firmware não usa bibliotecas externas.
 
-Edite o bloco **CONFIGURAÇÕES** no topo do `.ino` do módulo:
+Abra a pasta `EnergySafe/` na Arduino IDE (o `config.h` aparece numa aba ao lado do `.ino`). Tudo o que se ajusta fica no **`config.h`**:
 
 ```cpp
+#define MODULO 0                        // 0 = ADM0, 1 = ADM01, 2 = ADM02
+
 const char* WIFI_SSID     = "NomeDaRede";
 const char* WIFI_PASSWORD = "SuaSenha";
-const char* API_URL       = "https://backendsafe.onrender.com/medicoes/";
+const char* API_URL       = "https://energysafe.eco.br/api/medicoes/";
 
-const char* DEVICE_NAME   = "ADM0";
-const int   CANAL_IDS[3]  = {1, 2, 3};
+#if MODULO == 0                         // um bloco destes para cada módulo
+    const char* DEVICE_NAME = "ADM0";
+    const int   CANAL_IDS[3] = {1, 2, 3};
+    // Preenchidos com o resultado da calibração:
+    const int   CANAL_VSENSOR_IDX[3] = {0, 1, 1};   // 0 = VP, 1 = VN
+    const float CAL_GAIN_I[3] = {1.0000f, 1.0000f, 1.0000f};
+    const float CAL_GAIN_V[2] = {234.26f, 234.26f};
+#elif MODULO == 1
+    ...
+#endif
 
-// Preenchidos com o resultado da calibração:
-const int   CANAL_VSENSOR_IDX[3] = {0, 1, 1};              // 0 = VP, 1 = VN
-const float CAL_GAIN_I[3]        = {1.0f, 1.0f, 1.0f};
-const float CAL_GAIN_V[2]        = {234.26f, 234.26f};
-
-#define PUBLISH_INTERVAL_MS 600000UL   // 10 min
+#define PUBLISH_INTERVAL_MS 600000UL    // 10 min (5000UL para teste)
+#define VALIDO_V_MIN 80.0f              // abaixo disso: valido=false
+#define VALIDO_I_MIN 0.05f
 ```
+
+Para gravar outro módulo, troque só o `MODULO` e grave de novo. A calibração de cada módulo fica guardada no bloco dele.
 
 A rede libera o acesso por MAC. O MAC de cada placa aparece no Serial logo no boot.
 
@@ -73,7 +94,7 @@ A rede libera o acesso por MAC. O MAC de cada placa aparece no Serial logo no bo
 
 ## 🧪 Calibração
 
-A calibração é feita **em cada módulo, no local da instalação**, com o código `EnergySafe_calibracao.ino`. Ele usa o mesmo cálculo do firmware, então os valores encontrados podem ser copiados direto.
+A calibração é feita **em cada módulo, no local da instalação**, com o código `calibracao_energysafe.ino`. Ele usa o mesmo cálculo do firmware, então os valores encontrados podem ser copiados direto.
 
 A calibração define três coisas:
 
@@ -91,7 +112,7 @@ A calibração define três coisas:
 
 **1. Gravar o código de calibração**
 
-Grave o `EnergySafe_calibracao.ino` no módulo e abra o Monitor Serial em **115200**, com a opção **"Nova linha"** ativada. Espere ~10 s até as leituras começarem a aparecer, uma tabela a cada ~2 s:
+Grave o `calibracao_energysafe.ino` no módulo e abra o Monitor Serial em **115200**, com a opção **"Nova linha"** ativada. Espere ~10 s até as leituras começarem a aparecer, uma tabela a cada ~2 s:
 
 ```
 TENSAO
@@ -125,7 +146,7 @@ Faça **um circuito por vez**, com a carga resistiva ligada só nele:
 3. Veja a coluna **par**. Com carga resistiva, o sensor de tensão certo é o que dá **FP ≈ 1,00**.
 4. Repita com `i2` e `i3` nos outros circuitos.
 
-**5. Copiar para o firmware**
+**5. Copiar para o `config.h`**
 
 Digite **`p`**. O código imprime as linhas prontas:
 
@@ -135,7 +156,7 @@ const float CAL_GAIN_I[3] = {0.8712f, 1.0345f, 0.9921f};
 const float CAL_GAIN_V[2] = {231.45f, 238.10f};
 ```
 
-Cole essas linhas no bloco CONFIGURAÇÕES do firmware **daquele módulo** (ADM0, ADM01 ou ADM02) e grave o firmware.
+Cole essas linhas no `config.h`, **dentro do bloco daquele módulo** (`#if MODULO == 0`, `1` ou `2`), substituindo as que estão lá. Depois grave o firmware com o `MODULO` certo.
 
 ### Dicas
 
@@ -156,7 +177,8 @@ Cole essas linhas no bloco CONFIGURAÇÕES do firmware **daquele módulo** (ADM0
 ```
 ┌────────────────────────────────────────────┐
 │  FreeRTOS Task: acquisitionTask() (Core 1) │
-│  • Amostra V e I a 2 kHz (10 ciclos)       │
+│  • Timer de 2 kHz acorda a task por amostra│
+│  • Lê os 3 canais ao mesmo tempo           │
 │  • Remove offset DC (EMA)                  │
 │  • Filtro passa-baixa                      │
 │  • Calcula Vrms, Irms, P, S, FP, Freq      │
@@ -175,7 +197,7 @@ Cole essas linhas no bloco CONFIGURAÇÕES do firmware **daquele módulo** (ADM0
 └────────────────────────────────────────────┘
 ```
 
-A medição roda numa task separada no Core 1. Assim, o envio pela rede nunca atrasa a amostragem.
+A medição roda numa task separada no Core 1, acordada por um timer a cada amostra. Entre as amostras ela fica bloqueada, então o `loop()` (HTTPS, SD, Wi-Fi) tem CPU de sobra e a amostragem não depende do envio pela rede.
 
 ### Proteções
 
@@ -189,7 +211,7 @@ A medição roda numa task separada no Core 1. Assim, o envio pela rede nunca at
 ### Intervalos
 
 ```cpp
-#define PUBLISH_INTERVAL_MS   600000UL  // envio a cada 10 min (5000UL para teste)
+#define PUBLISH_INTERVAL_MS   600000UL  // envio a cada 10 min (5000UL para teste) — no config.h
 #define RETRY_INTERVAL_MS     120000UL  // reenvio do SD a cada 2 min
 #define WIFI_CHECK_MS          15000UL  // verificação do Wi-Fi a cada 15 s
 #define WDT_TIMEOUT_S              30   // watchdog
@@ -198,7 +220,7 @@ A medição roda numa task separada no Core 1. Assim, o envio pela rede nunca at
 
 ### Envio para a API
 
-`POST /medicoes/` com `Content-Type: application/json`:
+`POST /api/medicoes/` com `Content-Type: application/json`:
 
 ```json
 {
@@ -207,11 +229,11 @@ A medição roda numa task separada no Core 1. Assim, o envio pela rede nunca at
   "tensao": 220.50,
   "potencia": 1065.1,
   "valido": true,
-  "timestamp": "2026-09-29T17:32:00Z"
+  "timestamp": "2026-09-29T14:32:00"
 }
 ```
 
-- `valido = false` quando `Vrms ≤ 5 V` ou `Irms ≤ 0,02 A` (circuito desligado), ou quando o sanity check falha.
+- `valido = false` quando `Vrms < VALIDO_V_MIN` ou `Irms < VALIDO_I_MIN` (circuito desligado ou só ruído), ou quando o sanity check falha. Medições inválidas não somam energia.
 - O JSON é montado com `snprintf`, sem biblioteca externa.
 
 ### Buffer offline (SD)
@@ -220,21 +242,21 @@ Quando não há conexão ou a API rejeita a medição, a linha vai para `/pendin
 
 ```
 canal_id,timestamp,tensao,corrente,potencia_ativa,potencia_aparente,fator_potencia,frequencia,energia_kwh,valido
-1,2026-09-29T17:32:00Z,220.50,4.8321,1065.08,1065.48,0.9996,60.00,0.012345,1
+1,2026-09-29T14:32:00,220.50,4.8321,1065.08,1065.48,0.9996,60.00,0.012345,1
 ```
 
 O reenvio acontece a cada 2 minutos, sempre que o Wi-Fi estiver conectado.
 
 ### NTP
 
-O firmware sincroniza o horário com `pool.ntp.org` e `time.google.com` em **UTC**, no boot e a cada reconexão do Wi-Fi. Se o NTP falhar, o timestamp passa a ser relativo ao boot (`1970-01-01T00:01:03Z`). Na rede da instituição, as portas **UDP 123 (NTP)** e **443 (HTTPS)** precisam estar liberadas.
+O firmware sincroniza o horário com `pool.ntp.org` e `time.google.com` no boot e a cada reconexão do Wi-Fi, já no **horário de Brasília (UTC-3)**. O timestamp vai sem sufixo de fuso (`2026-09-29T14:32:00`). Se o NTP falhar, o timestamp passa a ser relativo ao boot (`1970-01-01T00:01:03`). Na rede da instituição, as portas **UDP 123 (NTP)** e **443 (HTTPS)** precisam estar liberadas.
 
 ### Saída Serial (115200 baud)
 
 ```
 MAC do ESP32: XX:XX:XX:XX:XX:XX
 ==================================================
-  ENERGYSAFE — FIRMWARE v5.0.6
+  ENERGYSAFE — FIRMWARE v5.1.0
   Modulo: ADM0 | Canais: 1, 2, 3
 ==================================================
 [WDT] Watchdog configurado: timeout=30s
@@ -243,7 +265,7 @@ MAC do ESP32: XX:XX:XX:XX:XX:XX
 [SD] OK. Capacidade: 15001MB
 [WIFI] Iniciando conexao...
 Hostname: ADM0
-[NTP] Sincronizado: 2026-09-29T17:32:00Z
+[NTP] Sincronizado: 2026-09-29T14:32:00
 [SISTEMA] Pronto. Task de aquisicao iniciada.
 ==================================================
 [PUBLICACAO #1] Uptime: 600s
@@ -261,7 +283,9 @@ Hostname: ADM0
 |---|---|---|
 | `[SD] FALHA!` | Cartão em formato errado ou GND do leitor solto | Use cartão até 32 GB em FAT32 e confira o GND do leitor |
 | Não conecta no Wi-Fi | MAC não liberado, SSID ou senha errados | Confira o MAC no Serial com a lista liberada |
-| `Erro de conexao: -1` na API | HTTPS bloqueado ou backend acordando (Render) | Libere a porta 443. As medições ficam no SD e são reenviadas |
+| `Erro de conexao: -1` na API | HTTPS bloqueado ou servidor fora do ar | Libere a porta 443. As medições ficam no SD e são reenviadas |
+| Reinicia com `task_wdt` logo após `[API] Canal 1` | Firmware anterior à v5.0.7 | Use o firmware atual |
+| `Failed uploading` / "dispositivo não está funcionando" | Velocidade de upload alta ou placa alimentada só pelo CP2102 | Upload Speed 115200 e alimente a placa pela fonte dela |
 | Timestamp `1970-...` | NTP bloqueado | Libere a porta UDP 123 |
 
 ---
@@ -270,7 +294,9 @@ Hostname: ADM0
 
 | Versão | Mudanças |
 |---|---|
-| **v5.0.6** | Pinos do SD corrigidos (CS 17, SCK 5). Timestamp em UTC. ArduinoJson removido. Um firmware por módulo. Par tensão↔corrente configurável e código de calibração |
+| **v5.1.0** | Firmware único para os 3 módulos + `config.h`. Sketches em pastas próprias. Sketch de teste da API |
+| v5.0.7 | Correção do reset por watchdog (aquisição por timer). 3 canais amostrados ao mesmo tempo. kWh corrigido (antes ~3x menor). Limiares de validade. Timeout de TLS. Horário de Brasília. Nova URL da API |
+| v5.0.6 | Pinos do SD corrigidos (CS 17, SCK 5). ArduinoJson removido. Par tensão↔corrente configurável e código de calibração |
 | v5.0.5 | Bluetooth removido |
 | v5.0.4 | Calibração por fase |
 | v5.0.3 | Tensão nos pinos VP/VN (ADC1) |
