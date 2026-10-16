@@ -1,4 +1,4 @@
-# ⚡ EnergySafe — Firmware v5.1.0
+# ⚡ EnergySafe — Firmware v5.1.1
 
 Firmware para **ESP32** que monitora o consumo de energia em até 3 circuitos. Ele mede corrente e tensão, envia as medições para a API via HTTPS e guarda os dados no cartão SD quando a rede falha, para reenviar depois.
 
@@ -48,12 +48,12 @@ EnergySafe_TesteAPI/
 
 | SD | GPIO |
 |---|---|
-| CS | 17 |
+| CS | 5 |
 | MOSI | 23 |
 | MISO | 19 |
-| SCK | 5 |
+| SCK (CLK) | 18 |
 
-> O SCK do SD está no GPIO 5, e não no 18 (padrão do ESP32). Por isso o SPI é iniciado com os pinos explícitos no código.
+> É a pinagem VSPI padrão do ESP32. O SPI é iniciado com os pinos explícitos no código (`SD_*_PIN` no `EnergySafe.ino`).
 
 ---
 
@@ -256,11 +256,11 @@ O firmware sincroniza o horário com `pool.ntp.org` e `time.google.com` no boot 
 ```
 MAC do ESP32: XX:XX:XX:XX:XX:XX
 ==================================================
-  ENERGYSAFE — FIRMWARE v5.1.0
+  ENERGYSAFE — FIRMWARE v5.1.1
   Modulo: ADM0 | Canais: 1, 2, 3
 ==================================================
 [WDT] Watchdog configurado: timeout=30s
-[SD] Pinos: CS=17 MOSI=23 MISO=19 SCK=5
+[SD] Pinos: CS=5 MOSI=23 MISO=19 SCK=18
 [SD] Montado a 20000 kHz
 [SD] OK. Capacidade: 15001MB
 [WIFI] Iniciando conexao...
@@ -294,9 +294,10 @@ Hostname: ADM0
 
 | Versão | Mudanças |
 |---|---|
-| **v5.1.0** | Firmware único para os 3 módulos + `config.h`. Sketches em pastas próprias. Sketch de teste da API |
+| **v5.1.1** | Pinos do SD conferidos na placa: CS 5, MOSI 23, MISO 19, CLK 18 |
+| v5.1.0 | Firmware único para os 3 módulos + `config.h`. Sketches em pastas próprias. Sketch de teste da API |
 | v5.0.7 | Correção do reset por watchdog (aquisição por timer). 3 canais amostrados ao mesmo tempo. kWh corrigido (antes ~3x menor). Limiares de validade. Timeout de TLS. Horário de Brasília. Nova URL da API |
-| v5.0.6 | Pinos do SD corrigidos (CS 17, SCK 5). ArduinoJson removido. Par tensão↔corrente configurável e código de calibração |
+| v5.0.6 | Pinos do SD alterados (CS 17, SCK 5 — errados, corrigidos na v5.1.1). ArduinoJson removido. Par tensão↔corrente configurável e código de calibração |
 | v5.0.5 | Bluetooth removido |
 | v5.0.4 | Calibração por fase |
 | v5.0.3 | Tensão nos pinos VP/VN (ADC1) |

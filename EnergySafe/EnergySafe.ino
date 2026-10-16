@@ -1,11 +1,16 @@
 /*
 ============================================================
-EnergySafe — Firmware v5.1.0 — ADM0 / ADM01 / ADM02
+EnergySafe — Firmware v5.1.1 — ADM0 / ADM01 / ADM02
 3 Fases | SCT-013-000 + ZMPT101B | NTP | HTTPS | SD Buffer
 ============================================================
 
 >>> CONFIGURAÇÃO: edite apenas o config.h (módulo, Wi-Fi, API,
 >>> calibração, intervalo de envio). Este arquivo não muda entre módulos.
+
+[v5.1.1] PINOS DO SD CONFERIDOS NA PLACA (REV 1.0):
+    CS=GPIO5, MOSI=GPIO23, MISO=GPIO19, CLK/SCK=GPIO18
+  (é a pinagem VSPI padrão do ESP32; a v5.0.6 usava CS=17 e SCK=5,
+   que não correspondem à placa — por isso o SD não montava)
 
 [v5.1.0] FIRMWARE ÚNICO + config.h:
 - EnergySafe_ADM0.ino, _ADM01.ino e _ADM02.ino eram cópias que só
@@ -100,7 +105,7 @@ PINOS:
 - Tensão (2 sensores, ESP32-E):
     ZMPT no VP (GPIO36) e ZMPT no VN (GPIO39) — um de 220 V e
     um de 110 V; o par corrente↔tensão é definido em CANAL_VSENSOR_IDX
-- SD Card SPI:           CS=17, MOSI=23, MISO=19, SCK=5   [v5.0.6]
+- SD Card SPI (VSPI):    CS=5, MOSI=23, MISO=19, SCK=18   [v5.1.1]
 ============================================================
 */
 
@@ -169,11 +174,11 @@ const int PINO_VSENSOR[2]  = {36, 39};       // ZMPT no VP (U5), ZMPT no VN (U6)
 #define TZ_BRASILIA      "<-03>3"
 #define TZ_SUFIXO        ""
 
-// ─── [v5.0.6] SD Card — pinos da placa Energy Safe REV 1.0 ─
-#define SD_CS_PIN        17
+// ─── [v5.1.1] SD Card — pinos da placa Energy Safe REV 1.0 ─
+#define SD_CS_PIN        5
 #define SD_MOSI_PIN      23
 #define SD_MISO_PIN      19
-#define SD_SCK_PIN       5
+#define SD_SCK_PIN       18
 
 // Frequências de montagem do SD, da mais rápida para a mais lenta
 const uint32_t SD_FREQS_HZ[] = {20000000UL, 10000000UL, 4000000UL};
@@ -315,7 +320,7 @@ void setup() {
                   mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
     printSeparador();
-    LOGBTln("  ENERGYSAFE — FIRMWARE v5.1.0");
+    LOGBTln("  ENERGYSAFE — FIRMWARE v5.1.1");
     LOGBTf("  Modulo: %s | Canais: %d, %d, %d\n",
            DEVICE_NAME, CANAL_IDS[0], CANAL_IDS[1], CANAL_IDS[2]);
     LOGBTln("  Segurança reforçada");
@@ -1125,7 +1130,7 @@ void initSD() {
     LOGBTf("[SD] Pinos: CS=%d MOSI=%d MISO=%d SCK=%d\n",
            SD_CS_PIN, SD_MOSI_PIN, SD_MISO_PIN, SD_SCK_PIN);
 
-    // [v5.0.6] SPI com os pinos da placa (SCK no GPIO5, não no 18)
+    // SPI com os pinos da placa (VSPI: SCK 18, MISO 19, MOSI 23, CS 5)
     spiSD.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
     pinMode(SD_CS_PIN, OUTPUT);
     digitalWrite(SD_CS_PIN, HIGH);
