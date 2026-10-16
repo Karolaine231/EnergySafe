@@ -1,8 +1,31 @@
 /*
 ============================================================
-EnergySafe — Firmware v5.0.6 — Módulo ADM0
+EnergySafe — Firmware v5.0.7 — Módulo ADM0
 3 Fases | SCT-013-000 + ZMPT101B | NTP | HTTPS | SD Buffer
 ============================================================
+
+[v5.0.7] CORREÇÃO DO RESET POR WATCHDOG (task_wdt / loopTask):
+- A acquisitionTask (prioridade 5, core 1) fazia espera ativa com
+  delayMicroseconds() por ~500 ms e só cedia a CPU por 1 ms
+  (vTaskDelay(1)). O loop() (prioridade 1, mesmo core) ficava com
+  ~0,2% da CPU, o handshake TLS do POST levava >30 s e o WDT
+  reiniciava a placa logo após "[API] Canal 1 | Payload ...".
+- Agora um esp_timer periódico (500 us) acorda a task a cada amostra
+  via notificação; entre amostras ela fica BLOQUEADA e o loop()
+  roda normalmente.
+- Os 3 canais são amostrados SIMULTANEAMENTE (antes um canal por vez,
+  cada um ficava ~2/3 do tempo sem ser medido).
+- Somas de RMS/potência acumuladas amostra a amostra (sem buffers).
+- Energia: antes cada canal integrava só a própria janela de 165 ms,
+  mas era medido a cada ~500 ms → kWh ~3x menor que o real. Corrigido.
+- Janela: 333 amostras (9,99 ciclos de 60 Hz) em vez de 330 (9,9).
+- Validade: limiares mínimos configuráveis (VALIDO_V_MIN / VALIDO_I_MIN)
+  — com entradas desconectadas o ruído de 60 Hz dava V≈60 V, I≈2 A
+  e valido=sim. Energia só acumula quando a medição é válida.
+- HTTPS: timeout de handshake TLS (padrão era 120 s, > WDT de 30 s)
+  e timeout de conexão explícitos.
+- MAC impresso no boot lido do eFuse (antes saía 00:00:00:00:00:00
+  porque o Wi-Fi ainda não estava inicializado).
 
 [v5.0.6] CORREÇÃO DO CARTÃO SD (placa Energy Safe REV 1.0):
 - Pinos do SD corrigidos para os da PCB:
@@ -82,6 +105,8 @@ PINOS:
 #include <time.h>
 #include <math.h>
 #include <esp_task_wdt.h>    // [v5.0] Watchdog Timer
+#include <esp_timer.h>       // [v5.0.7] Timer de amostragem
+#include <esp_mac.h>         // [v5.0.7] MAC lido do eFuse
 
 // Macros de log — agora apenas via Serial (Bluetooth removido em v5.0.5)
 #define LOGBT(msg)       Serial.print(msg)
@@ -149,7 +174,18 @@ const float CAL_GAIN_V[2] = {234.26f, 234.26f};      // ZMPT VP, ZMPT VN
 #define SAMPLE_RATE_HZ   2000
 #define SAMPLE_PERIOD_US (1000000 / SAMPLE_RATE_HZ)
 #define WINDOW_CYCLES    10
-#define WINDOW_SAMPLES   (SAMPLE_RATE_HZ / 60 * WINDOW_CYCLES)
+// [v5.0.7] Multiplica antes de dividir: 333 amostras (9,99 ciclos)
+// em vez de 330 (9,9 ciclos), o que reduz a oscilação do RMS.
+#define WINDOW_SAMPLES   (SAMPLE_RATE_HZ * WINDOW_CYCLES / 60)
+
+// ─── [v5.0.7] Limiares de medição válida ───────────────────
+// Abaixo disso a leitura é tratada como ruído (sensor desligado,
+// entrada flutuando). Com o pino solto, o ruído de 60 Hz captado
+// chega a dar V≈60 V e I≈2 A depois dos ganhos de calibração.
+// Ajuste após calibrar: menor tensão de rede real esperada e
+// menor corrente que você quer registrar.
+#define VALIDO_V_MIN     80.0f     // [V]
+#define VALIDO_I_MIN     0.05f     // [A]
 
 // ─── Filtro EMA ────────────────────────────────────────────
 #define DC_ALPHA         0.001f
@@ -270,9 +306,6 @@ CanalResult ultimoSnap[3];
 //  Protótipos
 // ═══════════════════════════════════════════════════════════
 void acquisitionTask(void* param);
-void processarCanal(int canal, float* bufV, float* bufI, int n,
-                     unsigned long janela_ms);
-float detectarFrequencia(float* buf, int n, float sampleRate);
 bool  sanityCheck(Medicao& m);
 String    getTimestamp();
 
@@ -299,11 +332,15 @@ void setup() {
     Serial.begin(115200);
     delay(1000);
 
-    Serial.print("MAC do ESP32: ");
-    Serial.println(WiFi.macAddress());
+    // [v5.0.7] WiFi.macAddress() retorna zeros antes de WiFi.mode();
+    // lê o MAC de estação direto do eFuse.
+    uint8_t mac[6];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    Serial.printf("MAC do ESP32: %02X:%02X:%02X:%02X:%02X:%02X\n",
+                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
     printSeparador();
-    LOGBTln("  ENERGYSAFE — FIRMWARE v5.0.6");
+    LOGBTln("  ENERGYSAFE — FIRMWARE v5.0.7");
     LOGBTf("  Modulo: %s | Canais: %d, %d, %d\n",
            DEVICE_NAME, CANAL_IDS[0], CANAL_IDS[1], CANAL_IDS[2]);
     LOGBTln("  Segurança reforçada");
@@ -339,11 +376,13 @@ void setup() {
         initNTP();
     }
 
-    // [v5.0] Task de aquisição com stack maior (10240 bytes)
+    // [v5.0.7] A task agora bloqueia entre amostras (acordada pelo
+    // esp_timer), então prioridade 5 no core 1 não sufoca mais o loop().
+    // Sem buffers de amostras: 6 KB de stack bastam.
     xTaskCreatePinnedToCore(
         acquisitionTask,
         "AcqTask",
-        10240,    // [v5.0] aumentado de 8192 para comportar buffers estáticos
+        6144,
         NULL,
         5,
         NULL,
@@ -523,155 +562,172 @@ bool sanityCheck(Medicao& m) {
 }
 
 // ═══════════════════════════════════════════════════════════
-//  TASK DE AQUISIÇÃO CONTÍNUA (FreeRTOS, Core 1)
+//  TASK DE AQUISIÇÃO CONTÍNUA (FreeRTOS, Core 1) — [v5.0.7]
+//
+//  Um esp_timer periódico (SAMPLE_PERIOD_US) notifica a task a cada
+//  amostra. Entre amostras a task fica BLOQUEADA em ulTaskNotifyTake,
+//  liberando o core 1 para o loop() (HTTPS, SD, Wi-Fi).
+//
+//  Em cada amostra lê os 2 ZMPT e os 3 sensores de corrente (5 leituras,
+//  ~100 us) e acumula Σv², Σi², Σv·i. A cada WINDOW_SAMPLES fecha a
+//  janela para os 3 canais de uma vez — custo de poucos µs, então
+//  nenhuma amostra é perdida.
 // ═══════════════════════════════════════════════════════════
-void acquisitionTask(void* param) {
-    static float bufV[WINDOW_SAMPLES];
-    static float bufI[WINDOW_SAMPLES];
+static TaskHandle_t       hAcqTask      = NULL;
+static esp_timer_handle_t hAmostraTimer = NULL;
 
+static void amostraTimerCb(void* arg) {
+    // Roda na task do esp_timer (core 0); só acorda a aquisição.
+    if (hAcqTask != NULL) {
+        xTaskNotifyGive(hAcqTask);
+    }
+}
+
+void acquisitionTask(void* param) {
     LOGBTf("[ACQ] Task iniciada. Rate=%dHz, Janela=%d amostras\n",
            SAMPLE_RATE_HZ, WINDOW_SAMPLES);
 
-    float dcV[NUM_CANAIS], dcI[NUM_CANAIS];
+    // Offset DC inicial no meio da escala (sinais convertidos para volts)
+    float dcV[2] = {ADC_VREF / 2.0f, ADC_VREF / 2.0f};
+    float dcI[NUM_CANAIS];
+    // Estado do filtro passa-baixa de 1ª ordem (média com a anterior)
+    float lpV[2] = {0.0f, 0.0f};
+    float lpI[NUM_CANAIS];
     for (int c = 0; c < NUM_CANAIS; c++) {
-        // [v5.0.6] Offset inicial em volts (o sinal é convertido para V).
-        // Antes era ADC_MID (2047,5), e o filtro levava vários segundos
-        // para convergir, gerando leituras erradas nas primeiras publicações.
-        dcV[c] = ADC_VREF / 2.0f;
         dcI[c] = ADC_VREF / 2.0f;
+        lpI[c] = 0.0f;
     }
 
-    unsigned long tJanelaInicio = micros();
+    // Acumuladores da janela
+    double sumV2[2];
+    double sumI2[NUM_CANAIS], sumVI[NUM_CANAIS];
+    // Detecção de frequência por cruzamento por zero (por sensor de tensão)
+    int   zcCount[2], zcFirst[2], zcLast[2];
+    float vAnterior[2] = {0.0f, 0.0f};
+
+    auto zerarJanela = [&]() {
+        for (int s = 0; s < 2; s++) {
+            sumV2[s] = 0.0;
+            zcCount[s] = 0; zcFirst[s] = -1; zcLast[s] = -1;
+        }
+        for (int c = 0; c < NUM_CANAIS; c++) {
+            sumI2[c] = 0.0; sumVI[c] = 0.0;
+        }
+    };
+    zerarJanela();
+
+    // Timer de amostragem
+    hAcqTask = xTaskGetCurrentTaskHandle();
+    esp_timer_create_args_t args = {};
+    args.callback        = &amostraTimerCb;
+    args.arg             = NULL;
+    args.dispatch_method = ESP_TIMER_TASK;
+    args.name            = "amostra";
+    if (esp_timer_create(&args, &hAmostraTimer) != ESP_OK ||
+        esp_timer_start_periodic(hAmostraTimer, SAMPLE_PERIOD_US) != ESP_OK) {
+        LOGBTln("[ACQ][ERRO] Falha ao criar o timer de amostragem. Reiniciando...");
+        delay(500);
+        ESP.restart();
+    }
+
+    const float escala = ADC_VREF / ADC_FULL_SCALE;
+    int     n       = 0;
+    int64_t tJanela = esp_timer_get_time();
 
     while (true) {
-        for (int canal = 0; canal < NUM_CANAIS; canal++) {
-            for (int n = 0; n < WINDOW_SAMPLES; n++) {
-                unsigned long t0 = micros();
+        // Bloqueia até o próximo tick do timer. pdFALSE: se a task
+        // atrasar, as notificações pendentes não são descartadas.
+        ulTaskNotifyTake(pdFALSE, portMAX_DELAY);
 
-                int rawV = analogRead(PINO_VSENSOR[CANAL_VSENSOR_IDX[canal]]);
-                int rawI = analogRead(PINO_CORRENTE[canal]);
+        // ── Tensões (os 2 ZMPT) ─────────────────────────────
+        float v[2];
+        for (int s = 0; s < 2; s++) {
+            float x = (float)analogRead(PINO_VSENSOR[s]) * escala;
+            dcV[s]  = (1.0f - DC_ALPHA) * dcV[s] + DC_ALPHA * x;
+            lpV[s]  = 0.5f * ((x - dcV[s]) + lpV[s]);
+            v[s]    = lpV[s] * CAL_GAIN_V[s];
 
-                float adcV = (float)rawV * (ADC_VREF / ADC_FULL_SCALE);
-                float adcI = (float)rawI * (ADC_VREF / ADC_FULL_SCALE);
+            sumV2[s] += (double)v[s] * v[s];
 
-                dcV[canal] = (1.0f - DC_ALPHA) * dcV[canal] + DC_ALPHA * adcV;
-                dcI[canal] = (1.0f - DC_ALPHA) * dcI[canal] + DC_ALPHA * adcI;
-
-                float vCentrado = adcV - dcV[canal];
-                float iCentrado = adcI - dcI[canal];
-
-                if (n > 0) {
-                    vCentrado = 0.5f * (vCentrado + bufV[n - 1]);
-                    iCentrado = 0.5f * (iCentrado + bufI[n - 1]);
-                }
-
-                bufV[n] = vCentrado;
-                bufI[n] = iCentrado;
-
-                long resta = (long)SAMPLE_PERIOD_US - (long)(micros() - t0);
-                if (resta > 0) {
-                    delayMicroseconds((uint32_t)resta);
-                }
+            if (n > 0 && vAnterior[s] < 0.0f && v[s] >= 0.0f) {
+                zcCount[s]++;
+                if (zcFirst[s] < 0) zcFirst[s] = n;
+                zcLast[s] = n;
             }
-
-            unsigned long janela_ms = (micros() - tJanelaInicio) / 1000UL;
-            tJanelaInicio = micros();
-
-            processarCanal(canal, bufV, bufI, WINDOW_SAMPLES, janela_ms);
+            vAnterior[s] = v[s];
         }
 
-        vTaskDelay(1);
-    }
-}
+        // ── Correntes (3 canais) ────────────────────────────
+        for (int c = 0; c < NUM_CANAIS; c++) {
+            float x = (float)analogRead(PINO_CORRENTE[c]) * escala;
+            dcI[c]  = (1.0f - DC_ALPHA) * dcI[c] + DC_ALPHA * x;
+            lpI[c]  = 0.5f * ((x - dcI[c]) + lpI[c]);
+            float i = lpI[c] / BURDEN_OHMS * CT_RATIO * CAL_GAIN_I[c];
 
-// ═══════════════════════════════════════════════════════════
-//  PROCESSAMENTO LOCAL DAS GRANDEZAS ELÉTRICAS
-// ═══════════════════════════════════════════════════════════
-void processarCanal(int canal, float* bufV, float* bufI, int n,
-                     unsigned long janela_ms) {
-    double sumV2 = 0.0, sumI2 = 0.0, sumVI = 0.0;
-
-    // [v5.0.4] Ganho de tensão vem do sensor físico que esta fase usa
-    // (via CANAL_VSENSOR_IDX); ganho de corrente é individual por fase.
-    float ganhoV = CAL_GAIN_V[CANAL_VSENSOR_IDX[canal]];
-    float ganhoI = CAL_GAIN_I[canal];
-
-    for (int k = 0; k < n; k++) {
-        float v = bufV[k] * ganhoV;
-        float i = bufI[k] / BURDEN_OHMS * CT_RATIO * ganhoI;
-
-        sumV2 += (double)v * v;
-        sumI2 += (double)i * i;
-        sumVI += (double)v * i;
-    }
-
-    float vrms     = sqrtf((float)(sumV2 / n));
-    float irms     = sqrtf((float)(sumI2 / n));
-    float pAtiva   = (float)(sumVI / n);
-    float pAparente = vrms * irms;
-
-    float fp = 0.0f;
-    if (pAparente > 0.1f) {
-        fp = pAtiva / pAparente;
-        fp = constrain(fp, -1.0f, 1.0f);
-    }
-
-    float freq = detectarFrequencia(bufV, n, (float)SAMPLE_RATE_HZ);
-    if (freq < 45.0f || freq > 70.0f) {
-        freq = FREQ_NOMINAL_HZ;
-    }
-
-    bool valido = (vrms > 5.0f && irms > 0.02f);
-
-    float dt_h     = (float)janela_ms / 3600000.0f;
-    float delta_kwh = fabsf(pAtiva) * dt_h / 1000.0f;
-
-    // [v5.0] timeout aumentado de 50ms para 100ms + log explícito de falha
-    if (xSemaphoreTake(xResultMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-        resultados[canal].tensao_rms        = vrms;
-        resultados[canal].corrente_rms      = irms;
-        resultados[canal].potencia_ativa    = pAtiva;
-        resultados[canal].potencia_aparente = pAparente;
-        resultados[canal].fator_potencia    = fp;
-        resultados[canal].frequencia        = freq;
-        resultados[canal].valido            = valido;
-
-        // [v5.0] Cap de energia: evita overflow de float após operação prolongada
-        float novaEnergia = resultados[canal].energia_kwh + delta_kwh;
-        resultados[canal].energia_kwh = min(novaEnergia, MAX_ENERGIA_KWH);
-
-        xSemaphoreGive(xResultMutex);
-    } else {
-        // [v5.0] Falha no mutex logada explicitamente — antes era silenciosa
-        Serial.printf("[ACQ][AVISO] Canal %d: timeout no mutex (100ms). "
-                      "Amostra descartada.\n", canal);
-    }
-}
-
-// ═══════════════════════════════════════════════════════════
-//  DETECÇÃO DE FREQUÊNCIA POR CRUZAMENTO POR ZERO
-// ═══════════════════════════════════════════════════════════
-float detectarFrequencia(float* buf, int n, float sampleRate) {
-    int cruzamentos = 0;
-    int primeiroIdx = -1;
-    int ultimoIdx   = -1;
-
-    for (int k = 1; k < n; k++) {
-        if (buf[k - 1] < 0.0f && buf[k] >= 0.0f) {
-            cruzamentos++;
-            if (primeiroIdx < 0) primeiroIdx = k;
-            ultimoIdx = k;
+            sumI2[c] += (double)i * i;
+            sumVI[c] += (double)v[CANAL_VSENSOR_IDX[c]] * i;
         }
-    }
 
-    if (cruzamentos >= 2) {
-        int amostrasEntreCruzamentos = ultimoIdx - primeiroIdx;
-        float periodMedio = (float)amostrasEntreCruzamentos
-                            / (float)(cruzamentos - 1)
-                            / sampleRate;
-        return (periodMedio > 0.0f) ? (1.0f / periodMedio) : FREQ_NOMINAL_HZ;
+        if (++n < WINDOW_SAMPLES) continue;
+
+        // ── Fecha a janela ──────────────────────────────────
+        int64_t agora   = esp_timer_get_time();
+        float   janela_s = (float)(agora - tJanela) / 1e6f;
+        tJanela = agora;
+
+        float vrms[2], freq[2];
+        for (int s = 0; s < 2; s++) {
+            vrms[s] = sqrtf((float)(sumV2[s] / n));
+            freq[s] = FREQ_NOMINAL_HZ;
+            if (zcCount[s] >= 2) {
+                float periodo = (float)(zcLast[s] - zcFirst[s])
+                                / (float)(zcCount[s] - 1)
+                                / (float)SAMPLE_RATE_HZ;
+                if (periodo > 0.0f) freq[s] = 1.0f / periodo;
+            }
+            if (freq[s] < 45.0f || freq[s] > 70.0f) freq[s] = FREQ_NOMINAL_HZ;
+        }
+
+        CanalResult novo[NUM_CANAIS];
+        for (int c = 0; c < NUM_CANAIS; c++) {
+            int   s    = CANAL_VSENSOR_IDX[c];
+            float irms = sqrtf((float)(sumI2[c] / n));
+            float p    = (float)(sumVI[c] / n);
+            float sAp  = vrms[s] * irms;
+            float fp   = (sAp > 0.1f) ? constrain(p / sAp, -1.0f, 1.0f) : 0.0f;
+
+            novo[c].tensao_rms        = vrms[s];
+            novo[c].corrente_rms      = irms;
+            novo[c].potencia_ativa    = p;
+            novo[c].potencia_aparente = sAp;
+            novo[c].fator_potencia    = fp;
+            novo[c].frequencia        = freq[s];
+            novo[c].valido            = (vrms[s] >= VALIDO_V_MIN &&
+                                         irms    >= VALIDO_I_MIN);
+            novo[c].energia_kwh       = 0.0f;   // preenchido abaixo
+        }
+
+        if (xSemaphoreTake(xResultMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
+            for (int c = 0; c < NUM_CANAIS; c++) {
+                // Energia só acumula com medição válida (ruído não vira kWh).
+                // janela_s é o tempo real da janela, e cada canal foi medido
+                // durante TODA ela — a integração cobre 100% do tempo.
+                float e = resultados[c].energia_kwh;
+                if (novo[c].valido) {
+                    e += fabsf(novo[c].potencia_ativa) * janela_s / 3600.0f / 1000.0f;
+                    if (e > MAX_ENERGIA_KWH) e = MAX_ENERGIA_KWH;
+                }
+                novo[c].energia_kwh = e;
+                resultados[c] = novo[c];
+            }
+            xSemaphoreGive(xResultMutex);
+        } else {
+            Serial.println("[ACQ][AVISO] Timeout no mutex (100ms). Janela descartada.");
+        }
+
+        n = 0;
+        zerarJanela();
     }
-    return FREQ_NOMINAL_HZ;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -706,11 +762,16 @@ bool enviarMedicao(const Medicao& m) {
         LOGBTln("[TLS] AVISO: conexao sem verificacao de certificado!");
     }
 
+    // [v5.0.7] O handshake TLS tem timeout próprio, de 120 s por padrão —
+    // maior que o WDT de 30 s. Limita a 10 s.
+    client.setHandshakeTimeout(10);
+
     HTTPClient http;
     http.begin(client, API_URL);
     http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
     http.addHeader("Content-Type", "application/json");
-    http.setTimeout(10000);
+    http.setConnectTimeout(5000);   // [v5.0.7] conexão TCP
+    http.setTimeout(10000);         // leitura da resposta
 
     String json = medicaoParaJSON(m);
 
