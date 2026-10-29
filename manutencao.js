@@ -47,157 +47,7 @@ function buildUrl(path, params = {}) {
   return url.toString();
 }
 
-/* ══════════════════════════════════════
-   MODO DEMONSTRAÇÃO (dados simulados)
-   Abra a página com  manutencao.html?demo=1  para usar dados
-   fictícios em vez do banco. Nada é enviado nem gravado na API.
-══════════════════════════════════════ */
-const MODO_DEMO = typeof location !== "undefined" && new URLSearchParams(location.search).has("demo");
-let demoDB = null;
-
-function construirDemo() {
-  // gerador pseudoaleatório com semente fixa: os gráficos são iguais a cada recarga
-  let seed = 20261029;
-  const rand = () => {
-    seed |= 0; seed = (seed + 0x6D2B79F5) | 0;
-    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-  const pad = n => String(n).padStart(2, "0");
-  const isoLocal = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}:00`;
-  // perfil de carga ao longo do dia (aula de manhã/tarde, noite reduzida, madrugada baixa)
-  const perfil = h => h < 6 ? 0.25 : h < 8 ? 0.6 : h < 18 ? 1.0 : h < 22 ? 0.7 : 0.35;
-
-  const agora = new Date(); agora.setSeconds(0, 0);
-
-  const locais = [
-    { id: 1, nome: "Bloco A – Engenharia" },
-    { id: 2, nome: "Bloco B – Laboratórios" }
-  ];
-  const quadros = [
-    { id: 1, nome: "QDG Bloco A",      local_id: 1 },
-    { id: 2, nome: "QD Laboratórios",  local_id: 2 }
-  ];
-  const dispositivos = [
-    { id: 1, nome: "Ar-condicionado Sala 101",    quadro_id: 1, ativo: true,  kw: 1.9 },
-    { id: 2, nome: "Laboratório de Informática",  quadro_id: 2, ativo: true,  kw: 2.6 },
-    { id: 3, nome: "Bomba de água",               quadro_id: 1, ativo: true,  kw: 0.9 },
-    { id: 4, nome: "Câmara fria (desativada)",    quadro_id: 2, ativo: false, kw: 0 }
-  ];
-
-  // 3 canais (fases A, B, C) por dispositivo; carga um pouco desigual entre fases
-  const FATOR_FASE = [1.0, 0.92, 1.08];
-  const canais = [];
-  dispositivos.forEach(d => FASES.forEach((f, i) => canais.push({
-    id: (d.id - 1) * 3 + i + 1, dispositivo_id: d.id, nome: `Fase ${f}`, kw: d.kw / 3 * FATOR_FASE[i]
-  })));
-  const canaisAtivos = canais.filter(c => dispositivos.find(d => d.id === c.dispositivo_id).ativo);
-
-  // Consumo (kWh): 1 leitura a cada 6 h, nos últimos 4 dias
-  const consumo = [];
-  let idC = 1;
-  canaisAtivos.forEach(c => {
-    for (let dia = 3; dia >= 0; dia--) {
-      [0, 6, 12, 18].forEach(h => {
-        const t = new Date(agora); t.setDate(t.getDate() - dia); t.setHours(h, 0, 0, 0);
-        if (t > agora) return;
-        const kwh = c.kw * 6 * perfil(h + 3) * (0.85 + rand() * 0.3);
-        consumo.push({ id: idC++, sensor_id: c.id, data: isoLocal(t).slice(0, 10), timestamp: isoLocal(t), kwh: +kwh.toFixed(3) });
-      });
-    }
-  });
-
-  // Medições elétricas: 1 a cada 15 min nas últimas ~15 h (mais recente primeiro)
-  const medicoes = [];
-  let idM = 1;
-  canaisAtivos.forEach(c => {
-    for (let k = 0; k < 60; k++) {
-      const t = new Date(agora.getTime() - k * 15 * 60000);
-      let ativaW = c.kw * 1000 * perfil(t.getHours()) * (0.85 + rand() * 0.3);
-      const fp   = Math.min(0.98, 0.86 + rand() * 0.11);
-      let tensao = 127 + (rand() - 0.5) * 4 - (ativaW > 700 ? 1.2 : 0);
-      // picos de sobrecorrente no ar-condicionado (fase A) para exemplificar os alertas
-      if (c.id === 1 && (k === 6 || k === 7)) ativaW *= 2.1;
-      const aparente = ativaW / fp;
-      const corrente = aparente / tensao;
-      const reativa  = Math.sqrt(Math.max(aparente ** 2 - ativaW ** 2, 0));
-      medicoes.push({
-        id: idM++, canal_id: c.id, timestamp: isoLocal(t), valido: true,
-        tensao: +tensao.toFixed(2), corrente: +corrente.toFixed(3),
-        potencia: +ativaW.toFixed(1), potencia_ativa: +ativaW.toFixed(1),
-        potencia_aparente: +aparente.toFixed(1), potencia_reativa: +reativa.toFixed(1),
-        fator_potencia: +fp.toFixed(3)
-      });
-    }
-  });
-  medicoes.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
-
-  // Alertas: 26 nos últimos 5 dias, cerca de 60% pendentes
-  const modelos = [
-    { tipo: "sobrecorrente",        niveis: ["critico", "aviso"], msg: "Corrente acima do limite",           valor: () => 26 + rand() * 9,   limite: 25 },
-    { tipo: "queda_brusca",         niveis: ["aviso"],            msg: "Queda brusca de tensão detectada",   valor: () => 100 + rand() * 9,  limite: 114 },
-    { tipo: "consumo_fora_horario", niveis: ["info", "aviso"],    msg: "Consumo fora do horário de aula",    valor: () => 1.2 + rand() * 1.5, limite: 0.5 }
-  ];
-  const alertas = [];
-  for (let i = 1; i <= 26; i++) {
-    const m = modelos[Math.floor(rand() * modelos.length)];
-    const c = canaisAtivos[Math.floor(rand() * canaisAtivos.length)];
-    const t = new Date(agora.getTime() - rand() * 5 * 24 * 3600000);
-    alertas.push({
-      id: i, canal_id: c.id, tipo: m.tipo, nivel: m.niveis[Math.floor(rand() * m.niveis.length)],
-      mensagem: m.msg, valor: +m.valor().toFixed(2), limite: m.limite,
-      resolvido: rand() < 0.4, timestamp: isoLocal(t)
-    });
-  }
-
-  return { locais, quadros, dispositivos, canais, consumo, medicoes, alertas };
-}
-
-/* Responde no lugar da API, aceitando os mesmos parâmetros usados pelo painel */
-async function dadosDemo(path, params = {}) {
-  if (!demoDB) demoDB = construirDemo();
-  const db = demoDB;
-  const recurso = String(path).replace(/\/+$/, "");
-  const lim = Number(params.limit) || 500;
-  const canaisDoDisp = id => db.canais.filter(c => String(c.dispositivo_id) === String(id)).map(c => c.id);
-  let out = [];
-
-  if (recurso === "/locais") out = db.locais;
-  else if (recurso === "/quadros") out = db.quadros.filter(q => !params.local_id || String(q.local_id) === String(params.local_id));
-  else if (recurso === "/dispositivos") out = db.dispositivos
-    .filter(d => !params.quadro_id || String(d.quadro_id) === String(params.quadro_id))
-    .map(({ kw, ...d }) => d);
-  else if (recurso === "/canais") out = db.canais
-    .filter(c => !params.dispositivo_id || String(c.dispositivo_id) === String(params.dispositivo_id))
-    .map(({ kw, ...c }) => c);
-  else if (recurso === "/consumo") out = db.consumo.filter(c => !params.sensor_id || String(c.sensor_id) === String(params.sensor_id));
-  else if (recurso === "/medicoes") {
-    out = db.medicoes;
-    if (params.canal_id) out = out.filter(m => String(m.canal_id) === String(params.canal_id));
-    if (params.dispositivo_id) { const ids = canaisDoDisp(params.dispositivo_id); out = out.filter(m => ids.includes(m.canal_id)); }
-  } else if (recurso === "/alertas") {
-    out = db.alertas;
-    if (params.dispositivo_id) { const ids = canaisDoDisp(params.dispositivo_id); out = out.filter(a => ids.includes(a.canal_id)); }
-  }
-  return JSON.parse(JSON.stringify(out.slice(0, lim)));
-}
-
-function demoResolverAlerta(id) {
-  const a = demoDB?.alertas.find(x => String(x.id) === String(id));
-  if (a) a.resolvido = true;
-}
-
-function mostrarBannerDemo() {
-  const b = document.createElement("div");
-  b.style.cssText = "position:fixed;bottom:14px;right:14px;z-index:9999;background:rgba(251,191,36,.96);color:#1a1a1a;padding:8px 14px;border-radius:999px;font:600 12px system-ui,sans-serif;box-shadow:0 4px 16px rgba(0,0,0,.35)";
-  const url = new URL(location.href); url.searchParams.delete("demo");
-  b.innerHTML = `🧪 Modo demonstração · dados simulados · <a href="${url}" style="color:#1a1a1a;text-decoration:underline">sair</a>`;
-  document.body.appendChild(b);
-}
-
 async function getJSON(path, params = {}, retries = 2) {
-  if (MODO_DEMO) return dadosDemo(path, params);
   const url = buildUrl(path, params);
   for (let attempt = 0; attempt <= retries; attempt++) {
     const controller = new AbortController();
@@ -243,16 +93,9 @@ function exportCsv(filename, rows) {
   const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  // carimbo de data no nome do arquivo: consumo_2026-10-29.csv
-  a.href = url; a.download = filename.replace(/\.csv$/i, "") + "_" + new Date().toISOString().slice(0, 10) + ".csv";
+  a.href = url; a.download = filename;
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
-}
-
-/* Número com vírgula decimal (Excel pt-BR lê como número, não como data/texto) */
-function numBR(n, casas = 2) {
-  if (n === null || n === undefined || n === "" || Number.isNaN(Number(n))) return "";
-  return Number(n).toFixed(casas).replace(".", ",");
 }
 
 function setStatusText(msg, tipo = "ok") {
@@ -309,8 +152,6 @@ let consumoCache           = [];
 let alertasCache           = [];
 let eventosCache           = [];
 let medicoesCache          = [];
-let canalParaDispositivo   = new Map();   // canal_id -> { id, nome, fase, quadro_id }
-let quadroInfoMap          = new Map();   // quadro_id -> { quadro, local }
 
 let consumoPorDispositivoCache = new Map();
 
@@ -347,8 +188,6 @@ function adaptConsumo(item) {
     id: pick(item,"id") ?? null,
     canal_id: pick(item,"sensor_id","canal_id") ?? null,
     data: pick(item,"data") ?? null,
-    // horário real da medição (se o backend enviar); usado para 1 barra por medição
-    timestamp: normalizeTimestamp(pick(item,"timestamp","data_hora","datetime","created_at","criado_em","hora")) ?? null,
     kwh: Number(pick(item,"kwh") || 0)
   };
 }
@@ -438,69 +277,52 @@ function getConsumoAgrupadoPorData(lista) {
   return Array.from(bucket.entries()).map(([data,kwh]) => ({ data, kwh })).sort((a,b) => a.data.localeCompare(b.data));
 }
 
-/* Formata data+hora para os rótulos do eixo X (valor real de cada medição) */
-function formatDateTimeLabel(ts) {
-  const d = new Date(normalizeTimestamp(ts));
-  if (Number.isNaN(d.getTime())) return String(ts ?? "-");
-  return d.toLocaleString("pt-BR", { day:"2-digit", month:"2-digit", year:"numeric", hour:"2-digit", minute:"2-digit", second:"2-digit" });
-}
-
-/* Consumo SEM agrupar: cada registro vindo do banco vira uma barra.
-   Mantém o filtro de período; só não soma por dia. */
-function getConsumoIndividual(lista) {
-  const itens = filtrarConsumoPorPeriodo(lista)
-    .map(i => ({ ...i, _ord: i.timestamp || i.data }))
-    .sort((a, b) => String(a._ord).localeCompare(String(b._ord)) || (Number(a.id) || 0) - (Number(b.id) || 0));
-
-  // Sem horário no registro: numera as medições dentro do dia (16/10/2026 #1, #2...)
-  const seqPorDia = new Map();
-  return itens.map(i => {
-    let label;
-    if (i.timestamp && String(i.timestamp).length > 10) {
-      label = formatDateTimeLabel(i.timestamp);
-    } else {
-      const n = (seqPorDia.get(i.data) || 0) + 1;
-      seqPorDia.set(i.data, n);
-      label = `${formatDateBR(i.data)} #${n}`;
-    }
-    return { data: i.data, label, kwh: Number(i.kwh || 0) };
-  });
-}
-
-/* Filtra medições pelo período/intervalo escolhido (mesma regra do gráfico) */
-function filtrarMedicoesPorPeriodo(medicoes) {
+function agruparSeriePorCampo(medicoes, campo) {
   const lista = medicoes
-    .map(i => ({ ...i, data: normalizeTimestamp(i.timestamp)?.slice(0, 10), ts: i.timestamp }))
+    .map(i => ({ data: normalizeTimestamp(i.timestamp)?.slice(0, 10), ts: i.timestamp, valor: Number(i[campo] || 0) }))
     .filter(i => i.data)
-    .sort((a, b) => String(a.ts || a.data).localeCompare(String(b.ts || b.data)));
+    .sort((a, b) => a.data.localeCompare(b.data));
   if (!lista.length) return [];
 
+  let filtrada = [];
+
+  // Filtro customizado de medições tem prioridade
   if (filtroCustomMedicoes.ativo && filtroCustomMedicoes.inicio && filtroCustomMedicoes.fim) {
     const ini = filtroCustomMedicoes.inicio;
     const fim = filtroCustomMedicoes.fim;
-    return lista.filter(i => {
+    filtrada = lista.filter(i => {
       const ts = i.ts || (i.data + "T00:00:00");
       return ts >= ini && ts <= fim;
     });
+  } else {
+    const periodo = $("intervalo")?.value || "20";
+    const ultima  = lista[lista.length - 1].data;
+
+    if (periodo === "24h") {
+      filtrada = lista.filter(i => i.data === ultima);
+    } else {
+      const dias = Number(periodo);
+      if (!dias || isNaN(dias)) {
+        filtrada = lista;
+      } else {
+        const fimD = new Date(`${ultima}T00:00:00`);
+        const iniD = new Date(fimD);
+        iniD.setDate(fimD.getDate() - (dias - 1));
+        const iniStr = iniD.toISOString().slice(0, 10);
+        filtrada = lista.filter(i => i.data >= iniStr && i.data <= ultima);
+      }
+    }
   }
 
-  const periodo = $("intervalo")?.value || "20";
-  const ultima  = lista[lista.length - 1].data;
-  if (periodo === "24h") return lista.filter(i => i.data === ultima);
-
-  const dias = Number(periodo);
-  if (!dias || isNaN(dias)) return lista;
-  const fimD = new Date(`${ultima}T00:00:00`);
-  const iniD = new Date(fimD);
-  iniD.setDate(fimD.getDate() - (dias - 1));
-  const iniStr = iniD.toISOString().slice(0, 10);
-  return lista.filter(i => i.data >= iniStr && i.data <= ultima);
-}
-
-/* Valor real de cada medição (sem média): uma barra por registro do banco */
-function agruparSeriePorCampo(medicoes, campo) {
-  return filtrarMedicoesPorPeriodo(medicoes)
-    .map(i => ({ data: i.data, ts: i.ts, valor: Number(i[campo] || 0) }));
+  const bucket = new Map();
+  filtrada.forEach(i => {
+    const cur = bucket.get(i.data) || { soma: 0, qtd: 0 };
+    cur.soma += i.valor; cur.qtd++;
+    bucket.set(i.data, cur);
+  });
+  return Array.from(bucket.entries())
+    .map(([data, obj]) => ({ data, valor: obj.qtd ? obj.soma / obj.qtd : 0 }))
+    .sort((a, b) => a.data.localeCompare(b.data));
 }
 
 /* ══════════════════════════════════════
@@ -649,7 +471,7 @@ async function carregarMedicoesPorCanal(canalId) {
 }
 
 function preencherSelDispositivos() {
-  ["selDispositivoPotencia", "selDispositivoConsumo", "selDispositivoMedicoes"].forEach(selId => {
+  ["selDispositivoPotencia", "selDispositivoConsumo"].forEach(selId => {
     const sel = $(selId); if (!sel) return;
     const valorAtual = sel.value;
     sel.innerHTML = `<option value="">Todos os dispositivos</option>`;
@@ -781,14 +603,10 @@ async function resolverAlerta(alertaId, botao = null) {
 
   try {
     if (botao) { botao.disabled = true; botao.textContent = "Resolvendo..."; }
-    if (MODO_DEMO) {
-      demoResolverAlerta(alertaId);
-    } else {
-      const response = await fetch(`${API_BASE}/alertas/${alertaId}/resolver`, {
-        method: "PATCH", headers: { Accept: "application/json" }
-      });
-      if (!response.ok) throw new Error(`Falha ao resolver alerta ${alertaId}`);
-    }
+    const response = await fetch(`${API_BASE}/alertas/${alertaId}/resolver`, {
+      method: "PATCH", headers: { Accept: "application/json" }
+    });
+    if (!response.ok) throw new Error(`Falha ao resolver alerta ${alertaId}`);
     showFeedback("Alerta marcado como resolvido.", "info");
     await carregarAlertasAPI();
     carregarKPIsETabela(); carregarAlertasUI(); carregarEventos();
@@ -946,9 +764,9 @@ function renderGraficoMisto(labels, valores, labelBarra, labelLinha, sufixo = ""
         {
           type:"line", label:labelLinha, data:valores,
           borderColor:"rgba(56,189,248,1)", backgroundColor:"rgba(56,189,248,1)",
-          borderWidth:2, pointHoverRadius:6,
+          borderWidth:2, pointRadius:4, pointHoverRadius:6,
           pointBackgroundColor:"rgba(56,189,248,1)", pointBorderColor:"#ffffff",
-          pointBorderWidth:1.5, tension:0.3, fill:false, pointRadius: valores.length > 60 ? 2 : 4
+          pointBorderWidth:1.5, tension:0.3, fill:false
         }
       ]
     },
@@ -959,7 +777,7 @@ function renderGraficoMisto(labels, valores, labelBarra, labelLinha, sufixo = ""
         tooltip: { callbacks: { label: ctx => ` ${ctx.dataset.label}: ${Number(ctx.parsed.y).toFixed(2)}${sufixo}` } }
       },
       scales: {
-        x: { ticks:{ color:"rgba(234,240,255,.65)", maxRotation:50, minRotation:50, autoSkip: labels.length > 30, maxTicksLimit: 30 }, grid:{ color:"rgba(255,255,255,.06)" } },
+        x: { ticks:{ color:"rgba(234,240,255,.65)", maxRotation:50, minRotation:50, autoSkip:false }, grid:{ color:"rgba(255,255,255,.06)" } },
         y: { beginAtZero:true, ticks:{ color:"rgba(234,240,255,.65)" }, grid:{ color:"rgba(255,255,255,.06)" } }
       }
     }
@@ -967,13 +785,13 @@ function renderGraficoMisto(labels, valores, labelBarra, labelLinha, sufixo = ""
 }
 
 function renderGraficoConsumoGeral() {
-  setChartTexts("Consumo geral","Cada barra é uma medição real do banco, com linha de tendência.","Atualizado conforme os filtros.");
-  const medicoes = getConsumoIndividual();
-  if (!medicoes.length) { destruirGrafico(); return; }
+  setChartTexts("Consumo diário geral","Barras com linha mostrando a evolução diária.","Atualizado conforme os filtros.");
+  const agrupado = getConsumoAgrupadoPorData();
+  if (!agrupado.length) { destruirGrafico(); return; }
   renderGraficoMisto(
-    medicoes.map(i => i.label),
-    medicoes.map(i => Number(i.kwh.toFixed(3))),
-    "Consumo (kWh)", "Tendência", " kWh"
+    agrupado.map(i => formatDateBR(i.data)),
+    agrupado.map(i => Number(i.kwh.toFixed(3))),
+    "Consumo diário (kWh)", "Tendência", " kWh"
   );
 }
 
@@ -981,12 +799,12 @@ function renderGraficoConsumoPorDispositivo() {
   const dispositivoId = $("dispositivo")?.value || "";
   setChartTexts("Consumo por dispositivo","Selecione um dispositivo no filtro.","Selecione um dispositivo para visualizar.");
   if (!dispositivoId) { destruirGrafico(); showFeedback("Selecione um dispositivo para este modo.","info"); return; }
-  const medicoes = getConsumoIndividual();
-  if (!medicoes.length) { destruirGrafico(); return; }
+  const agrupado = getConsumoAgrupadoPorData();
+  if (!agrupado.length) { destruirGrafico(); return; }
   const nome = $("dispositivo")?.selectedOptions?.[0]?.textContent || "Dispositivo";
   renderGraficoMisto(
-    medicoes.map(i => i.label),
-    medicoes.map(i => Number(i.kwh.toFixed(3))),
+    agrupado.map(i => formatDateBR(i.data)),
+    agrupado.map(i => Number(i.kwh.toFixed(3))),
     `${nome} (kWh)`, "Tendência", " kWh"
   );
 }
@@ -1000,27 +818,20 @@ async function carregarGraficoPrincipal() {
 /* ══════════════════════════════════════
    GRÁFICO MEDIÇÕES (tensão/corrente)
 ══════════════════════════════════════ */
-async function renderGraficoMedicoes(modo) {
+function renderGraficoMedicoes(modo) {
   if (!medicoesCache.length) return;
   const campo = modo === "corrente" ? "corrente" : "tensao";
   const sufixo = campo === "tensao" ? " V" : " A";
-  // respeita o dispositivo selecionado no filtro (mesma regra do export)
-  let fonte = medicoesCache;
-  const idSel = $("selDispositivoMedicoes")?.value || "";
-  if (idSel) {
-    try { await garantirMapaCanais(); } catch (e) { console.warn(e); }
-    fonte = medicoesCache.filter(m => String(infoCanal(m.canal_id).id) === String(idSel));
-  }
-  const serie = agruparSeriePorCampo(fonte, campo);
+  const serie = agruparSeriePorCampo(medicoesCache, campo);
   const ctx = $("chartMedicoes"); if (!ctx) return;
   if (chartMedicoes) { chartMedicoes.destroy(); chartMedicoes = null; }
   if (!serie.length) return;
   chartMedicoes = new Chart(ctx, {
     data: {
-      labels: serie.map(i => i.ts ? formatDateTimeLabel(i.ts) : formatDateBR(i.data)),
+      labels: serie.map(i => new Date(i.data+"T00:00:00").toLocaleDateString("pt-BR")),
       datasets: [
         {
-          type:"bar", label: campo === "tensao" ? "Tensão (V)" : "Corrente (A)",
+          type:"bar", label: campo === "tensao" ? "Tensão média (V)" : "Corrente média (A)",
           data: serie.map(i => +Number(i.valor).toFixed(2)),
           borderWidth:1, borderRadius:4,
           backgroundColor:"rgba(139,92,246,0.28)", borderColor:"rgba(139,92,246,0.88)"
@@ -1038,7 +849,7 @@ async function renderGraficoMedicoes(modo) {
         tooltip: { callbacks: { label: ctx => ` ${ctx.dataset.label}: ${Number(ctx.parsed.y).toFixed(2)}${sufixo}` } }
       },
       scales: {
-        x: { ticks:{ color:"rgba(234,240,255,.65)", maxRotation:45, autoSkip: serie.length > 30, maxTicksLimit: 30 }, grid:{ color:"rgba(255,255,255,.06)" } },
+        x: { ticks:{ color:"rgba(234,240,255,.65)", maxRotation:45 }, grid:{ color:"rgba(255,255,255,.06)" } },
         y: { beginAtZero:false, ticks:{ color:"rgba(234,240,255,.65)" }, grid:{ color:"rgba(255,255,255,.06)" } }
       }
     }
@@ -1232,7 +1043,7 @@ async function carregarPainelCompleto() {
     setStatusText("Atualizado agora", "ok");
   } catch (error) {
     console.error(error);
-    showFeedback(`Não foi possível carregar os dados: ${error.message}. Dica: abra com ?demo=1 na URL para ver dados simulados.`, "error");
+    showFeedback(`Não foi possível carregar os dados: ${error.message}`, "error");
     setStatusText("Erro ao carregar", "error");
   } finally {
     setButtonLoading($("btnAplicar"), false);
@@ -1242,117 +1053,26 @@ async function carregarPainelCompleto() {
 
 /* ══════════════════════════════════════
    EXPORTAÇÕES
-   Dois exports fixos, pensados para a equipe técnica:
-   • Alertas            → lista de serviço dos técnicos e histórico de falhas
-   • Medições elétricas → dado bruto para análise do engenheiro
-   Ambos respeitam os filtros atuais da tela.
 ══════════════════════════════════════ */
-
-/* Carrega uma vez (só ao exportar): canal -> dispositivo/fase e quadro -> local */
-async function garantirMapaCanais() {
-  if (canalParaDispositivo.size) return canalParaDispositivo;
-
-  const dispositivos = todosDispositivosCache.length
-    ? todosDispositivosCache
-    : asArray(await getJSON("/dispositivos/", { limit: 500 })).map(adaptDispositivo);
-
-  // quadro -> local (busca os quadros de cada local)
-  const locais = locaisCache.length ? locaisCache : asArray(await getJSON("/locais/")).map(adaptLocal);
-  await Promise.all(locais.map(async l => {
-    try {
-      const quadros = asArray(await getJSON("/quadros/", { local_id: l.id })).map(adaptQuadro);
-      quadros.forEach(q => quadroInfoMap.set(String(q.id), { quadro: q.nome, local: l.nome }));
-    } catch (e) { console.warn("Quadros do local", l.id, e); }
-  }));
-
-  // canal -> dispositivo/fase
-  await Promise.all(dispositivos.map(async d => {
-    try {
-      const canais = asArray(await getJSON("/canais/", { dispositivo_id: d.id }));
-      canais.forEach((c, i) => {
-        const cid = c.id ?? c.canal_id;
-        if (cid !== undefined && cid !== null) {
-          canalParaDispositivo.set(Number(cid), { id: d.id, nome: d.nome, fase: FASES[i] || "", quadro_id: d.quadro_id });
-        }
-      });
-    } catch (e) { console.warn("Canais do dispositivo", d.id, e); }
-  }));
-  return canalParaDispositivo;
-}
-
-/* Dispositivo, fase, quadro e local de um canal */
-function infoCanal(canalId) {
-  const c = canalParaDispositivo.get(Number(canalId));
-  if (!c) return { id: "", nome: "—", fase: "", quadro: "—", local: "—" };
-  const q = quadroInfoMap.get(String(c.quadro_id)) || {};
-  return { ...c, quadro: q.quadro || "—", local: q.local || "—" };
-}
-
-/* ── Alertas: todos os filtrados (a tela mostra só 50) ── */
-async function linhasAlertas() {
-  await garantirMapaCanais();
-  const rows = [["ID","Data/Hora","Local","Quadro","Dispositivo","Fase","Tipo","Severidade","Mensagem","Valor","Limite","Status"]];
-  const filtroTipo = $("eventFilter")?.value || "";
-  let lista = [...alertasCache];
-  if (filtroTipo) lista = lista.filter(a => String(a.tipo) === String(filtroTipo));
-  lista.forEach(a => {
-    const c = infoCanal(a.canal_id);
-    rows.push([
-      a.id ?? "", formatDt(a.timestamp), c.local, c.quadro,
-      c.id !== "" ? c.nome : nomeDispositivoHistorico(), c.fase ? `Fase ${c.fase}` : "",
-      formatTipo(a.tipo), formatNivel(a.nivel), a.mensagem || "—",
-      numBR(a.valor, 2), numBR(a.limite, 2), a.resolvido ? "Resolvido" : "Pendente"
-    ]);
-  });
-  return rows;
-}
-
-/* ── Medições elétricas: valor real de cada medição (sem média) ── */
-async function linhasMedicoes() {
-  if (!medicoesCache.length) await carregarMedicoesGerais();
-  await garantirMapaCanais();
-  const rows = [["Data/Hora","Local","Quadro","Dispositivo","Fase","Tensão (V)","Corrente (A)","Potência ativa (W)","Potência aparente (VA)","Potência reativa (VAr)","Fator de potência","Medição válida"]];
-  const idSel = $("selDispositivoMedicoes")?.value || "";
-  filtrarMedicoesPorPeriodo(medicoesCache).forEach(m => {
-    const c = infoCanal(m.canal_id);
-    if (idSel && String(c.id) !== String(idSel)) return;
-    rows.push([
-      formatDateTimeLabel(m.ts), c.local, c.quadro, c.nome, c.fase ? `Fase ${c.fase}` : "",
-      numBR(m.tensao, 2), numBR(m.corrente, 3),
-      numBR(m.potencia_ativa ?? m.potencia, 1), numBR(m.potencia_aparente, 1), numBR(m.potencia_reativa, 1),
-      numBR(m.fator_potencia, 3), m.valido ? "Sim" : "Não"
-    ]);
-  });
-  return rows;
-}
-
-const EXPORTS = {
-  medicoes: { arquivo: "medicoes_eletricas", fn: linhasMedicoes },
-  alertas:  { arquivo: "alertas",            fn: linhasAlertas }
-};
-
-async function executarExportacao(btn, cfg) {
-  const textoOriginal = btn?.textContent;
-  try {
-    if (btn) { btn.disabled = true; btn.textContent = "Gerando..."; }
-    const rows = await cfg.fn();
-    if (rows.length <= 1) {
-      showFeedback("Não há dados para exportar com os filtros atuais.", "warn");
-      return;
-    }
-    exportCsv(cfg.arquivo + ".csv", rows);
-    showFeedback(`${rows.length - 1} linha(s) exportada(s) em ${cfg.arquivo}.csv.`, "info");
-  } catch (e) {
-    console.error("Erro ao exportar:", e);
-    showFeedback(`Não foi possível exportar: ${e.message}`, "error");
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = textoOriginal; }
-  }
-}
-
 function configurarExportacoes() {
-  $("btnExportSensors")?.addEventListener("click", e => executarExportacao(e.currentTarget, EXPORTS.medicoes));
-  $("btnExportEvents")?.addEventListener("click",  e => executarExportacao(e.currentTarget, EXPORTS.alertas));
+  $("btnExportSensors")?.addEventListener("click", () => {
+    const rows = [["Dispositivo","Data","Consumo (kWh)"]];
+    const fonte = dispositivosCache.length ? dispositivosCache : todosDispositivosCache;
+    fonte.forEach(d => {
+      const consumoDisp = consumoPorDispositivoCache.get(d.id) ?? [];
+      const agrupado = getConsumoAgrupadoPorData(consumoDisp);
+      agrupado.forEach(i => rows.push([d.nome, formatDateBR(i.data), Number(i.kwh||0).toFixed(2)]));
+    });
+    exportCsv("dispositivo_consumo.csv", rows);
+  });
+  $("btnExportEvents")?.addEventListener("click", () => {
+    const rows = [["DataHora","Tipo","Severidade","Dispositivo","Descricao","Status"]];
+    eventosCache.forEach(e => rows.push([
+      formatDt(e.timestamp), formatTipo(e.tipo), formatNivel(e.nivel),
+      nomeDispositivoHistorico(), e.mensagem || "—", e.resolvido ? "Resolvido" : "Pendente"
+    ]));
+    exportCsv("eventos_manutencao.csv", rows);
+  });
 }
 
 /* ══════════════════════════════════════
@@ -1519,7 +1239,6 @@ function configurarEventosUI() {
   });
   $("chartMode")?.addEventListener("change", async () => await carregarGraficoPrincipal());
   $("chartModeMedicoes")?.addEventListener("change", e => renderGraficoMedicoes(e.target.value));
-  $("selDispositivoMedicoes")?.addEventListener("change", () => renderGraficoMedicoes($("chartModeMedicoes")?.value || "tensao"));
   $("chartModePotencia")?.addEventListener("change", async () => {
     const fases = await carregarDadosPotencia();
     renderGraficoTemporalPotencia(fases);
@@ -1587,7 +1306,6 @@ function configurarNavegacao() {
 document.addEventListener("DOMContentLoaded", async () => {
   try {
     setStatusText("Inicializando...", "warn");
-    if (MODO_DEMO) mostrarBannerDemo();
     configurarNavegacao();
     configurarEventosUI();
     configurarExportacoes();
