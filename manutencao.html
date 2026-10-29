@@ -69,7 +69,7 @@
 
     <div class="sidenav-actions">
       <button class="btn-action primary" id="btnRefresh">↺ Atualizar dados</button>
-      <button class="btn-action" id="btnExportSensors">⬇ Exportar medições elétricas (CSV)</button>
+      <button class="btn-action" id="btnExportSensors">⬇ Exportar dispositivos (CSV)</button>
       <button class="btn-action" id="btnExportEvents">⬇ Exportar alertas (CSV)</button>
     </div>
   </aside>
@@ -292,17 +292,9 @@
           <div style="display:flex; align-items:flex-start; justify-content:space-between; gap:12px; flex-wrap:wrap; width:100%;">
             <div>
               <h2>Tensão e corrente</h2>
-              <p>Valor real de cada medição de tensão (V) e corrente (A) do período.</p>
+              <p>Médias diárias de tensão (V) e corrente (A) do período.</p>
             </div>
             <div style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
-
-              <!-- Dispositivo -->
-              <label class="chip">
-                Dispositivo
-                <select id="selDispositivoMedicoes">
-                  <option value="">Todos os dispositivos</option>
-                </select>
-              </label>
 
               <!-- Tipo -->
               <label class="chip">
@@ -351,7 +343,7 @@
             <canvas id="chartMedicoes"></canvas>
           </div>
         </div>
-        <div class="chart-hint">Use o filtro de dispositivo para ver as medições de um equipamento.</div>
+        <div class="chart-hint">Selecione um quadro ou dispositivo para filtrar as medições.</div>
       </div>
     </div>
 
