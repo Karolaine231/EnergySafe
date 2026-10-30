@@ -1,4 +1,4 @@
-# ⚡ EnergySafe — Firmware v5.1.1
+# ⚡ EnergySafe — Firmware v5.1.2
 
 Firmware para **ESP32** que monitora o consumo de energia em até 3 circuitos. Ele mede corrente e tensão, envia as medições para a API via HTTPS e guarda os dados no cartão SD quando a rede falha, para reenviar depois.
 
@@ -228,6 +228,9 @@ A medição roda numa task separada no Core 1, acordada por um timer a cada amos
   "corrente": 4.832,
   "tensao": 220.50,
   "potencia": 1065.1,
+  "potencia_aparente": 1065.5,
+  "potencia_reativa": 29.2,
+  "fator_potencia": 1.000,
   "valido": true,
   "timestamp": "2026-09-29T14:32:00"
 }
@@ -256,7 +259,7 @@ O firmware sincroniza o horário com `pool.ntp.org` e `time.google.com` no boot 
 ```
 MAC do ESP32: XX:XX:XX:XX:XX:XX
 ==================================================
-  ENERGYSAFE — FIRMWARE v5.1.1
+  ENERGYSAFE — FIRMWARE v5.1.2
   Modulo: ADM0 | Canais: 1, 2, 3
 ==================================================
 [WDT] Watchdog configurado: timeout=30s
@@ -294,7 +297,8 @@ Hostname: ADM0
 
 | Versão | Mudanças |
 |---|---|
-| **v5.1.1** | Pinos do SD conferidos na placa: CS 5, MOSI 23, MISO 19, CLK 18 |
+| **v5.1.2** | JSON envia `potencia_aparente`, `potencia_reativa` e `fator_potencia` |
+| v5.1.1 | Pinos do SD conferidos na placa: CS 5, MOSI 23, MISO 19, CLK 18 |
 | v5.1.0 | Firmware único para os 3 módulos + `config.h`. Sketches em pastas próprias. Sketch de teste da API |
 | v5.0.7 | Correção do reset por watchdog (aquisição por timer). 3 canais amostrados ao mesmo tempo. kWh corrigido (antes ~3x menor). Limiares de validade. Timeout de TLS. Horário de Brasília. Nova URL da API |
 | v5.0.6 | Pinos do SD alterados (CS 17, SCK 5 — errados, corrigidos na v5.1.1). ArduinoJson removido. Par tensão↔corrente configurável e código de calibração |

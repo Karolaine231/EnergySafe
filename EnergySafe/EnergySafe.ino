@@ -1,11 +1,14 @@
 /*
 ============================================================
-EnergySafe — Firmware v5.1.1 — ADM0 / ADM01 / ADM02
+EnergySafe — Firmware v5.1.2 — ADM0 / ADM01 / ADM02
 3 Fases | SCT-013-000 + ZMPT101B | NTP | HTTPS | SD Buffer
 ============================================================
 
 >>> CONFIGURAÇÃO: edite apenas o config.h (módulo, Wi-Fi, API,
 >>> calibração, intervalo de envio). Este arquivo não muda entre módulos.
+
+[v5.1.2] JSON da API agora envia potencia_aparente, potencia_reativa
+  e fator_potencia (antes ficavam null no banco).
 
 [v5.1.1] PINOS DO SD CONFERIDOS NA PLACA (REV 1.0):
     CS=GPIO5, MOSI=GPIO23, MISO=GPIO19, CLK/SCK=GPIO18
@@ -320,7 +323,7 @@ void setup() {
                   mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
     printSeparador();
-    LOGBTln("  ENERGYSAFE — FIRMWARE v5.1.1");
+    LOGBTln("  ENERGYSAFE — FIRMWARE v5.1.2");
     LOGBTf("  Modulo: %s | Canais: %d, %d, %d\n",
            DEVICE_NAME, CANAL_IDS[0], CANAL_IDS[1], CANAL_IDS[2]);
     LOGBTln("  Segurança reforçada");
@@ -909,17 +912,31 @@ void reenviarPendentes() {
 // frequencia, energia_kwh) continuam disponíveis no CSV do SD e nos logs,
 // mas não fazem parte do contrato atual da API e por isso não são enviados.
 String medicaoParaJSON(const Medicao& m) {
-    // [v5.0.6] Montado com snprintf — mesmo formato do ArduinoJson:
-    // {"canal_id":1,"corrente":0.123,"tensao":220.00,"potencia":27.1,
-    //  "valido":true,"timestamp":"2026-09-28T10:00:00Z"}
-    char buf[256];
+    // [v5.1.2] Inclui potencia_aparente, potencia_reativa e fator_potencia
+    // (antes ficavam null no banco). "potencia" continua sendo a ativa.
+    // {"canal_id":1,"corrente":4.832,"tensao":116.00,"potencia":550.1,
+    //  "potencia_aparente":560.5,"potencia_reativa":106.9,"fator_potencia":0.981,
+    //  "valido":true,"timestamp":"2026-10-30T17:20:00"}
+    //
+    // Potência reativa: Q = √(S² − P²). Sem sinal (não distingue carga
+    // indutiva de capacitiva) e inclui o efeito de harmônicas.
+    float s2 = m.potencia_aparente * m.potencia_aparente;
+    float p2 = m.potencia_ativa * m.potencia_ativa;
+    float q  = (s2 > p2) ? sqrtf(s2 - p2) : 0.0f;
+
+    char buf[320];
     snprintf(buf, sizeof(buf),
              "{\"canal_id\":%d,\"corrente\":%.3f,\"tensao\":%.2f,"
-             "\"potencia\":%.1f,\"valido\":%s,\"timestamp\":\"%s\"}",
+             "\"potencia\":%.1f,\"potencia_aparente\":%.1f,"
+             "\"potencia_reativa\":%.1f,\"fator_potencia\":%.3f,"
+             "\"valido\":%s,\"timestamp\":\"%s\"}",
              m.canal_id,
              m.corrente_rms,
              m.tensao_rms,
              m.potencia_ativa,
+             m.potencia_aparente,
+             q,
+             m.fator_potencia,
              m.valido ? "true" : "false",
              m.timestamp.c_str());
     return String(buf);
